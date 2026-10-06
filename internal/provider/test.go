@@ -366,6 +366,10 @@ func AuthHeaders(p Provider, proto Protocol) map[string]string {
 }
 
 func probe(ctx context.Context, p Provider, proto Protocol, url string, body []byte, model string, wait time.Duration) Result {
+	return probeReply(ctx, p, proto, url, body, model, wait, false)
+}
+
+func probeReply(ctx context.Context, p Provider, proto Protocol, url string, body []byte, model string, wait time.Duration, checked bool) Result {
 	r := Result{Protocol: proto, Model: model}
 	if model == "" {
 		r.Error = "no model to try: expose one, or refresh the model list"
@@ -405,9 +409,19 @@ func probe(ctx context.Context, p Provider, proto Protocol, url string, body []b
 	if res.StatusCode >= 200 && res.StatusCode < 300 {
 		// a stream is answered 200 before the model has said anything, and
 		// can still fail in it: read on to its first word or its error
-		if streams(body) {
-			if msg, failed := streamAnswer(res.Body); failed {
+		if streams(body) || checked && strings.HasPrefix(res.Header.Get("Content-Type"), "text/event-stream") {
+			if msg, failed := streamAnswerMode(res.Body, checked); failed {
 				r.Error = msg
+				return r
+			}
+		} else if checked {
+			b, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+			if err != nil {
+				r.Error = err.Error()
+				return r
+			}
+			if !healthAnswer(b) {
+				r.Error = "the endpoint returned success without a model answer"
 				return r
 			}
 		}
@@ -432,6 +446,10 @@ func streams(body []byte) bool {
 // Anthropic's events — and reports an error the stream gives before that.
 // A stream that ends with neither was answered, as a 200 always was.
 func streamAnswer(r io.Reader) (msg string, failed bool) {
+	return streamAnswerMode(r, false)
+}
+
+func streamAnswerMode(r io.Reader, checked bool) (msg string, failed bool) {
 	sc := bufio.NewScanner(io.LimitReader(r, 1<<20))
 	sc.Buffer(make([]byte, 64*1024), 1<<20)
 	for sc.Scan() {
@@ -467,15 +485,26 @@ func streamAnswer(r io.Reader) (msg string, failed bool) {
 		}
 		if ev.Type == "content_block_start" || ev.Type == "content_block_delta" || ev.Type == "response.output_item.added" ||
 			strings.HasPrefix(ev.Type, "response.") && strings.HasSuffix(ev.Type, ".delta") {
-			return "", false
+			if !checked || healthStreamContent([]byte(data)) {
+				return "", false
+			}
 		}
 		for _, c := range ev.Choices {
 			for _, k := range []string{"content", "reasoning", "reasoning_content", "tool_calls"} {
 				if v, ok := c.Delta[k]; ok && v != nil && v != "" {
+					if checked {
+						text, ok := v.(string)
+						if !ok || strings.TrimSpace(text) == "" {
+							continue
+						}
+					}
 					return "", false
 				}
 			}
 		}
+	}
+	if checked {
+		return "the stream ended without a model answer", true
 	}
 	return "", false
 }

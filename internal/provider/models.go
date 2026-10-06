@@ -709,7 +709,13 @@ func (p Provider) Serves(k KeyAccount, model string) bool {
 // Exposed lists the models magpie offers to agents for this provider: the
 // user's picks; else the preset's; else everything, when that is few.
 func (p Provider) Exposed() []catalog.Model {
-	avail := p.Available()
+	return healthExposed(p, p.exposed())
+}
+
+func (p Provider) exposed() []catalog.Model {
+	// Filter before the picker limit, so failed models near the top of a
+	// large relay list cannot crowd out verified models further down.
+	avail := healthExposed(p, p.Available())
 	byID := make(map[string]catalog.Model, len(avail))
 	for _, m := range avail {
 		byID[m.ID] = m

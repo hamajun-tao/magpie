@@ -50,6 +50,8 @@ const providerUsage = `usage:
   magpie provider listed <id> yes|no      no: its models serve only through routing groups, not in the list
   magpie provider off|on <id>             switch it off (kept, but no agent or request uses it), or on again
   magpie provider test <id> [model…]      send a tiny request through each endpoint, or to each model
+  magpie provider health on [minutes [failures]]   enable automatic text-model checks (defaults: 30 minutes, 2 failures)
+  magpie provider health off|scan|status          disable, check now, or show saved results
   magpie provider rm <id>                 remove a provider
 
   e.g. magpie provider add "My Relay" url=https://relay.example.com/v1 key=sk-…
@@ -268,6 +270,8 @@ func providerCmd(args []string) error {
 	}
 	verb, rest := args[1], args[2:]
 	switch verb {
+	case "health":
+		return modelHealthCmd(rest)
 	case "add":
 		return addProvider(rest)
 	case "set":

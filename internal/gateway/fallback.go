@@ -47,7 +47,8 @@ type candidate struct {
 	// the order the provider's page shows and a drag sets (#217)
 	rank int
 	// capped is set on an account left out as held at its usage cap
-	capped *capHold
+	capped     *capHold
+	healthHeld bool
 }
 
 // capHold is how an account is held at its usage cap: the cap, the share
@@ -155,6 +156,21 @@ func perKeyOf(p provider.Provider, model string, from provider.Protocol) (out, a
 // serve the model (provider.AccountModels, #474): never tried, whatever
 // else there is — none, when every one of them is.
 func perKeyBarred(p provider.Provider, model string, from provider.Protocol) (out, aside, left, barred []candidate) {
+	// Filter every returned pool, including the unlisted/last-resort keys.
+	// A health hold is not an account's manually restricted model list.
+	defer func() {
+		keep := func(c candidate) bool {
+			if provider.ModelHealthAllows(c.p, c.model) {
+				return false
+			}
+			c.healthHeld = true
+			barred = append(barred, c)
+			return true
+		}
+		out = slices.DeleteFunc(out, keep)
+		aside = slices.DeleteFunc(aside, keep)
+		left = slices.DeleteFunc(left, keep)
+	}()
 	if p.Account != nil {
 		also := p.AlsoOn()
 		var all []candidate
@@ -592,6 +608,8 @@ func barredOf(cs []candidate, q provider.Provider, fallback bool, from provider.
 			if !h.back.IsZero() {
 				w.CapBack = &h.back
 			}
+		} else if c.healthHeld {
+			w.HealthHeld = true
 		} else {
 			w.Barred = true
 		}

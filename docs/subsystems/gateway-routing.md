@@ -1,5 +1,20 @@
 # Gateway routing and fallback
 
+## Custom branch: model health routing
+
+Opt-in health checks are implemented in
+[`provider/model_health.go`](../../internal/provider/model_health.go).
+`perKeyBarred` excludes unknown or quarantined key/model pairs from every
+candidate list, including unlisted-key and fallback candidates. `attempt`
+rechecks readiness immediately before forwarding, covering a state change
+after planning and directly selected models. No permitted candidates gives
+a 503 for a health-held plan. Trace records identify these as `healthHeld`.
+`usable` and the translation fallback use the last successfully checked
+protocol, so a working Responses endpoint cannot send later requests to an
+untested or failed sibling Chat endpoint. `Serve` runs `KeepModelsHealthy`
+until gateway cancellation; catalog exposure follows the same readiness
+records. See [CUSTOM.md](../../CUSTOM.md) for operation and scope.
+
 The gateway is magpie's local LLM endpoint (`127.0.0.1:3425` by default). It
 serves Chat Completions, Responses, Anthropic Messages and Gemini. It finds
 the provider, key or account and model for each request. When the upstream

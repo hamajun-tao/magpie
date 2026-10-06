@@ -1,5 +1,26 @@
 # Providers and accounts
 
+## Custom branch: model health checks
+
+The `custom` branch adds opt-in checks for text models on URL/API-key
+providers. [`model_health.go`](../../internal/provider/model_health.go)
+owns configuration, per-key/model state, bounded scans and recovery;
+[`model_health_answer.go`](../../internal/provider/model_health_answer.go)
+requires actual text or reasoning from JSON/SSE replies. The OS-specific
+`model_health_lock_*` files serialize scans and atomic state writes across
+the gateway and CLI. Credentials and destination settings identify records
+through a digest; changing them requires a new successful check.
+
+`Exposed` filters before its picker limit and preserves manual picks.
+Scans refresh lists without dropping picks, re-read repaired destinations,
+and test every enabled key independently. Unknown models stay hidden;
+previously verified models are hidden after the configured consecutive
+failure threshold and restored on the next successful scan. Cancellation
+does not increment failures. An unreadable state file fails closed and
+cannot be overwritten by a scan. Subscription accounts, decision APIs and
+image generation retain their existing checks. See [CUSTOM.md](../../CUSTOM.md)
+for commands, defaults and the update workflow.
+
 The gateway can send a request to three kinds of upstream:
 
 - A **provider** in `providers.json`: an endpoint with one or more API keys.
