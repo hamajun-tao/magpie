@@ -140,16 +140,16 @@ func tinyBody(q Provider, proto Protocol, model string) (url, body string) {
 	switch proto {
 	case Chat:
 		if q.IsBedrock() || q.IsAzure() {
-			return q.Chat + "/chat/completions", fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"max_completion_tokens":16}`, model)
+			return q.Chat + "/chat/completions", fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"不要问为什么，只回复ok"}],"max_completion_tokens":16}`, model)
 		}
-		return q.Chat + "/chat/completions", fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"max_tokens":16}`, model)
+		return q.Chat + "/chat/completions", fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"不要问为什么，只回复ok"}],"max_tokens":16}`, model)
 	case Responses:
-		return q.Responses + "/responses", fmt.Sprintf(`{"model":%q,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"max_output_tokens":16}`, model)
+		return q.Responses + "/responses", fmt.Sprintf(`{"model":%q,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"不要问为什么，只回复ok"}]}],"max_output_tokens":16}`, model)
 	case Anthropic:
-		return q.Anthropic + "/v1/messages", fmt.Sprintf(`{"model":%q,"max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`, model)
+		return q.Anthropic + "/v1/messages", fmt.Sprintf(`{"model":%q,"max_tokens":16,"messages":[{"role":"user","content":"不要问为什么，只回复ok"}]}`, model)
 	case Gemini:
 		// Factory's generate route. droid sends no stream field.
-		return q.Base(Gemini) + "/generate", fmt.Sprintf(`{"model":%q,"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`, model)
+		return q.Base(Gemini) + "/generate", fmt.Sprintf(`{"model":%q,"contents":[{"role":"user","parts":[{"text":"不要问为什么，只回复ok"}]}]}`, model)
 	}
 	return "", ""
 }
