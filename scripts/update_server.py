@@ -200,7 +200,8 @@ class Update:
     def build_user(self, args, cwd=None, extra=None, capture=False):
         env = self.environment | (extra or {})
         command = ['runuser', '-u', USER, '--', 'env', '-i', *[k + '=' + v for k, v in env.items()], *map(str, args)]
-        result = subprocess.run(command, cwd=cwd, text=True, timeout=1800,
+        # Keep root's credential files private without changing executable modes in tests.
+        result = subprocess.run(command, cwd=cwd, text=True, timeout=1800, umask=0o022,
                                 stdout=subprocess.PIPE if capture else self.log, stderr=self.log)
         if result.returncode:
             raise RuntimeError('check or merge failed; see ' + str(self.directory / 'update.log'))

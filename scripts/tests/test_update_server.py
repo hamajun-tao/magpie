@@ -1,6 +1,9 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch, call, Mock
@@ -164,6 +167,34 @@ class DeploymentTests(unittest.TestCase):
         self.accept.assert_called_once_with('old')
         self.assertTrue(runner.report['no_changes'])
         self.assertEqual(runner.report['version'], 'old')
+
+
+class BuildEnvironmentTests(unittest.TestCase):
+    def test_private_parent_umask_does_not_change_generated_executable_permissions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = update.Update.__new__(update.Update)
+            runner.environment = {'PATH': os.defpath, 'HOME': directory}
+            runner.directory = root
+            executable = root / 'generated'
+            actual_run = subprocess.run
+
+            def without_user_switch(command, **kwargs):
+                # Test the real child process while keeping the test's existing identity.
+                self.assertEqual(command[:4], ['runuser', '-u', update.USER, '--'])
+                return actual_run(command[4:], **kwargs)
+
+            original = os.umask(0o077)
+            try:
+                with (root / 'build.log').open('w') as runner.log:
+                    with patch.object(update.subprocess, 'run', side_effect=without_user_switch):
+                        runner.build_user([sys.executable, '-c',
+                            'import os,sys; fd=os.open(sys.argv[1],os.O_CREAT|os.O_WRONLY,0o755); os.close(fd)',
+                            executable])
+                self.assertEqual(executable.stat().st_mode & 0o777, 0o755)
+                self.assertEqual((root / 'build.log').stat().st_mode & 0o777, 0o600)
+            finally:
+                os.umask(original)
 
 
 if __name__ == '__main__':
