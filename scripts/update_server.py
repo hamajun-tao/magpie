@@ -242,7 +242,7 @@ class Update:
             tests.update('internal/gui/tests/' + name + '.test.cjs' for name in ('gui-ja', 'gui-de'))
         if tests:
             self.check('Changed GUI tests (Chromium and WebKit, including locales)',
-                       ['/usr/bin/node', '--test', '--test-concurrency=2', *sorted(tests)], source,
+                       ['/usr/bin/node', '--test', '--test-concurrency=1', *sorted(tests)], source,
                        {'NODE_PATH': str(MAINT / 'ui/node_modules')})
 
     def run(self, check_only=False):
@@ -250,7 +250,8 @@ class Update:
         current = json.loads((ROOT / 'current/release.json').read_text())
         if current.get('tree') == self.report['tree'] and not check_only:
             wait_verified(current['built_version'])
-            self.report.update(no_changes=True, accepted=True)
+            self.report.update(no_changes=True, accepted=True, version=current['built_version'],
+                               running_commit=current.get('commit'))
             print('已是同一份代码，服务验收通过，无需重启。', flush=True)
             return
         self.check('Workflow rollback tests', ['python3', '-m', 'unittest', 'discover', '-s', 'scripts/tests', '-v'], source)

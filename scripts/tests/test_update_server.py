@@ -163,6 +163,7 @@ class DeploymentTests(unittest.TestCase):
         runner.check.assert_not_called()
         self.accept.assert_called_once_with('old')
         self.assertTrue(runner.report['no_changes'])
+        self.assertEqual(runner.report['version'], 'old')
 
 
 if __name__ == '__main__':
