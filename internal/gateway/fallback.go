@@ -1005,6 +1005,10 @@ type holdWriter struct {
 	// reasoning keeps the agent from its idle timeout with SSE comments
 	// meanwhile (#751)
 	alive *keptAlive
+	// notes are the headers magpie says of the try (noteMember), set
+	// under mu: all keepAlive sends of the try's before it has its status,
+	// as until then the try is still writing header, with no lock
+	notes http.Header
 
 	first firstToken // when its first content and text came (#196)
 
@@ -1043,6 +1047,18 @@ func newHoldWriter(w http.ResponseWriter, hold bool) *holdWriter {
 }
 
 func (h *holdWriter) Header() http.Header { return h.header }
+
+// note sets a header magpie says of the try, which keepAlive may send
+// from watch's goroutine before the try has its status.
+func (h *holdWriter) note(k, v string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.header.Set(k, v)
+	if h.notes == nil {
+		h.notes = http.Header{}
+	}
+	h.notes.Set(k, v)
+}
 
 func (h *holdWriter) WriteHeader(code int) {
 	h.mu.Lock()
@@ -1262,10 +1278,17 @@ func (h *holdWriter) keepAlive() {
 		return
 	}
 	if !a.sent {
+		// the try's header is whole once it has its status (WriteHeader,
+		// under mu); before, the vendor's are still being copied into it
+		// from the try's goroutine, and only magpie's notes are read
+		src := h.header
+		if h.status == 0 {
+			src = h.notes
+		}
 		dst := h.w.Header()
-		for k, v := range h.header {
+		for k, v := range src {
 			if k != resetsHeader && k != refusedHeader && k != "Content-Length" {
-				dst[k] = v
+				dst[k] = slices.Clone(v)
 			}
 		}
 		dst.Set("Content-Type", "text/event-stream; charset=utf-8")

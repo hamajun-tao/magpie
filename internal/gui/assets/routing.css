@@ -156,8 +156,11 @@
 /* side by side, the accounts end where the requests do and scroll like
    them, not run on down the page beside an empty column: of no height of
    their own, they take what the requests give the row, and no less than a
-   few accounts' */
-@container rt-more (min-width: 860px) {
+   few accounts'. Only where the requests' column still keeps each request
+   on one line (wider than 760px, see below): narrower, one column of
+   one-line requests reads better than two with each request on three
+   (#860, huoranxuanyuan) */
+@container rt-more (min-width: 1150px) {
   .rt-cols { grid-template-columns: minmax(0, 1fr) clamp(280px, 32%, 400px); }
   .rt-cols:not(.solo) .rt-col:last-child { display: flex; flex-direction: column; }
   .rt-cols:not(.solo) .rt-acts { flex: 1 1 auto; height: 0; min-height: 216px; overflow-y: auto; overscroll-behavior: contain; }
@@ -467,7 +470,8 @@ button.rt-session { cursor: pointer; }
 }
 .rt-cond:hover { color: var(--fg); border-color: var(--muted); }
 .rt-cond.on { border-style: solid; color: var(--fg); background: var(--card-2); }
-.rt-cond .ic { width: 14px; height: 14px; flex: none; }
+/* a chip in a Settings row too, where .row .ic makes icons 18–22px (duanckham on X) */
+.rt-cond .ic, .row .rt-cond .ic, body.window .row .rt-cond .ic { width: 14px; height: 14px; flex: none; }
 .rt-cond > span { overflow: hidden; text-overflow: ellipsis; }
 /* a group's logos overlap in discs whose rings sit outside them: clipped, the first lost its edge */
 .rt-cond > .ic-stack { overflow: visible; }

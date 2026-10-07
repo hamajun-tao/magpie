@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/yetone/magpie/internal/edit"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 // #304: PI_CODING_AGENT_DIR moves Pi's agent folder (config.js,
@@ -136,9 +137,7 @@ func TestOmpDetectedWithPiDir(t *testing.T) {
 	if omp(home).Detected() {
 		t.Error("Pi's folder is taken for omp's")
 	}
-	if err := os.WriteFile(filepath.Join(bin, "omp"), []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testenv.Program(t, filepath.Join(bin, "omp"), "#!/bin/sh\n")
 	if !omp(home).Detected() {
 		t.Error("omp's command is not")
 	}

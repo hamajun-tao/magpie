@@ -220,11 +220,14 @@ type SkillView struct {
 
 // View is the Library page.
 type View struct {
-	Agents       []AgentView       `json:"agents"`
-	Servers      []ServerView      `json:"servers"`
-	FoundServers []Found           `json:"foundServers"`
-	Skills       []SkillView       `json:"skills"`
-	FoundSkills  []FoundSkill      `json:"foundSkills"`
+	Agents       []AgentView  `json:"agents"`
+	Servers      []ServerView `json:"servers"`
+	FoundServers []Found      `json:"foundServers"`
+	Skills       []SkillView  `json:"skills"`
+	FoundSkills  []FoundSkill `json:"foundSkills"`
+	// NewSkills are skills a check found its skills' repositories to have
+	// added beside them, to add or set aside
+	NewSkills    []NewSkill        `json:"newSkills"`
 	Projects     []ProjectView     `json:"projects"`
 	Instructions *InstructionsView `json:"instructions"`
 	Dir          string            `json:"dir"`
@@ -345,6 +348,7 @@ func Read(problems []Problem) (*View, error) {
 		v.FoundServers[i].Icon = serverIcon(l, v.FoundServers[i].Server)
 	}
 	v.FoundSkills = foundSkills(l)
+	v.NewSkills = newSkills(l)
 	v.Projects = projectViews(l, problems)
 	v.SkillGroups = l.skillGroups()
 	return v, nil

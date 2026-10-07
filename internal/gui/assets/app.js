@@ -114,6 +114,19 @@ function el(tag, cls, text) {
   if (text !== undefined) e.textContent = text;
   return e;
 }
+// replaceKeeping is parent.replaceChildren(...nodes) that leaves a node
+// already in parent where it is, rather than taking it out and putting it
+// back. A filter redrawn from its own input event is one: taken out of the
+// page while an IME commits, it gets the text twice (#1055: 1, 2 → 1122).
+function replaceKeeping(parent, nodes) {
+  const keep = new Set(nodes);
+  for (const n of [...parent.childNodes]) if (!keep.has(n)) n.remove();
+  let at = parent.firstChild;
+  for (const n of nodes) {
+    if (n === at) at = at.nextSibling;
+    else parent.insertBefore(n, at);
+  }
+}
 function svg(d, size = 12, stroke = 1.6) {
   const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   s.setAttribute("viewBox", "0 0 16 16");
@@ -2242,9 +2255,10 @@ async function openAgentModels(a, anchor, ev) {
     },
   };
   document.addEventListener("mousedown", loading.away, true);
-  // an agent whose list goes in the order dragged here (Codex's, #855)
-  let models, orderable = false, ordered = false;
-  try { ({ models, orderable, ordered } = await api("agent-models/" + encodeURIComponent(a.id))); }
+  // every agent's list goes in the order dragged here (Codex's, #855; the
+  // others', #1052)
+  let models, ordered = false;
+  try { ({ models, ordered } = await api("agent-models/" + encodeURIComponent(a.id))); }
   catch (e) {
     if (agentModelsLoading === loading) { loading.drop(); status(e.message, "err"); }
     return;
@@ -2270,8 +2284,7 @@ async function openAgentModels(a, anchor, ev) {
   const seg = el("div", "am-seg");
   const segAll = el("button", "on", t("All")), segOn = el("button", "", t("Shown")), segOrder = el("button", "", t("Order"));
   segAll.type = segOn.type = segOrder.type = "button";
-  seg.append(segAll, segOn);
-  if (orderable) seg.append(segOrder);
+  seg.append(segAll, segOn, segOrder);
   tools.append(search, seg);
   const list = el("div", "am-list");
   const foot = el("div", "am-foot");
@@ -2517,7 +2530,12 @@ async function openAgentModels(a, anchor, ev) {
     // ordering is of the whole list: no search, no provider picked, and the
     // foot puts magpie's own order back rather than showing or hiding
     box.classList.toggle("ordering", order);
-    footNote.textContent = order ? t("Drag to put them in the order {agent} lists them; new models go last", { agent: a.name }) : t("New models are shown");
+    // Codex's /model, in WSL too, lists them as handed (#855); another
+    // agent is handed them in it, and one that sorts its own menu may sort
+    // them again
+    footNote.textContent = !order ? t("New models are shown")
+      : a.id.split("@wsl:")[0] === "codex" ? t("Drag to put them in the order {agent} lists them; new models go last", { agent: a.name })
+      : t("Drag to put them in the order magpie hands them to {agent}; new models go last", { agent: a.name });
     if (order) foot.replaceChildren(footNote, el("span", "sp"), unorder);
     else foot.replaceChildren(footNote, el("span", "sp"), hideAll, el("span", "am-dot", "·"), reset);
     list.scrollTop = 0;
@@ -4501,6 +4519,7 @@ function markUpstream() {
   const put = (box, s, after) => {
     if (!box) return;
     box.querySelector(":scope > .badge.upstream")?.remove();
+    box.classList.remove("with-upstream");
     if (!s) return;
     // a row's name as a box of its own, to be the part cut short
     if (!after && box.firstChild?.nodeType === Node.TEXT_NODE) {
@@ -4510,6 +4529,8 @@ function markUpstream() {
     }
     const b = upstreamBadge(s);
     if (after) after.after(b); else box.append(b);
+    // a class, not :has(), which Safari 15.0 doesn't parse (#220)
+    box.classList.add("with-upstream");
   };
   for (const row of document.querySelectorAll("#providers .row.provider[data-id], #offProviders .row.provider[data-id]")) {
     put(row.querySelector(".name"), upstreamOf(row.dataset.id));
@@ -7397,9 +7418,20 @@ function pickedOf(p) {
   return on.filter((m) => picks.has(m.id)).map((m) => m.id);
 }
 
+// baseAPIOf is the API a saved provider's Base URL is shown as: the one the
+// user picked and saved (baseAPI), while it has a URL, else the first that
+// has one. Without the pick, a provider with a chat URL beside its Responses
+// one came back as OpenAI compatible after Responses was picked and saved
+// (01huadalang).
+function baseAPIOf(p) {
+  const picked = p.baseAPI === "chat" ? "openai" : p.baseAPI;
+  if (picked && p[apiField[picked]]) return picked;
+  return p.chat ? "openai" : p.anthropic ? "anthropic" : p.responses ? "responses" : p.decide ? "decide" : "openai";
+}
+
 // draftOf is a saved provider as its editor's form holds it.
 function draftOf(p) {
-  return { id: p.id, name: p.name, preset: p.preset, chat: p.chat, responses: p.responses, anthropic: p.anthropic, catalog: p.catalog, decide: p.decide || "", key: "", api: p.chat ? "openai" : p.anthropic ? "anthropic" : p.responses ? "responses" : p.decide ? "decide" : "openai", chosen: pickedOf(p), extra: [], headers: headerRows(p.headers), icon: p.icon || "", fallback: [...(p.fallback || [])], unlisted: !!p.unlisted, searches: !!p.searches, pinUpstream: !!p.pinUpstream, balanceURL: p.balanceURL || "", balancePath: p.balancePath || "", modelsURL: p.modelsURL || "", contexts: contextsText(p.contexts), outputs: contextsText(p.outputs), compacts: contextsText(p.compacts), keysUrl: p.keysUrl || "", ...proxyDraft(p), ...concurrencyDraft(p) };
+  return { id: p.id, name: p.name, preset: p.preset, chat: p.chat, responses: p.responses, anthropic: p.anthropic, catalog: p.catalog, decide: p.decide || "", key: "", api: baseAPIOf(p), chosen: pickedOf(p), extra: [], headers: headerRows(p.headers), icon: p.icon || "", fallback: [...(p.fallback || [])], unlisted: !!p.unlisted, searches: !!p.searches, unredacted: !!p.unredacted, pinUpstream: !!p.pinUpstream, balanceURL: p.balanceURL || "", balancePath: p.balancePath || "", modelsURL: p.modelsURL || "", contexts: contextsText(p.contexts), outputs: contextsText(p.outputs), compacts: contextsText(p.compacts), keysUrl: p.keysUrl || "", ...proxyDraft(p), ...concurrencyDraft(p) };
 }
 
 // duplicateProvider opens the Add form on a copy of p (#268): its URLs,
@@ -7540,6 +7572,9 @@ function drawEditor(p, presetID) {
   // the Web search row, shown while there is an API it can search on
   const searchable = () => !!((draft.anthropic || "").trim() || (draft.responses || "").trim());
   let showSearch = () => {};
+  // the Redaction row, shown while every address is on this computer or
+  // the local network
+  let showLocal = () => {};
   if (custom) {
     name = input(draft.name, t("e.g. My Relay"));
     name.oninput = () => { draft.name = name.value; if (isNew) draft.id = slug(name.value); };
@@ -7550,8 +7585,8 @@ function drawEditor(p, presetID) {
     // that serves only the Responses API is added (and tested) with that
     // alone, since /chat/completions would only fail (#73)
     const seg = el("div", "segs");
-    for (const [v, l, hint] of [["openai", "OpenAI compatible", "…/v1 — chat completions, and responses when the vendor has it"], ["responses", "OpenAI Responses", "…/v1 — for a vendor that serves only the Responses API, not chat completions"], ["anthropic", "Anthropic compatible", "the root URL, what ANTHROPIC_BASE_URL would take"], ["decide", "System One", "a decision API's root, POST …/systemone under it: its models are a routing group's classifier, never an agent's"]]) {
-      const b = el("button", "opt" + (draft.api === v ? " on" : ""), t(l));
+    for (const [v, hint] of [["openai", "…/v1 — chat completions, and responses when the vendor has it"], ["responses", "…/v1 — for a vendor that serves only the Responses API, not chat completions"], ["anthropic", "the root URL, what ANTHROPIC_BASE_URL would take"], ["decide", "a decision API's root, POST …/systemone under it: its models are a routing group's classifier, never an agent's"]]) {
+      const b = el("button", "opt" + (draft.api === v ? " on" : ""), t(API_NAMES[v]));
       b.title = t(hint);
       b.onclick = () => {
         if (draft.api === v) return;
@@ -7579,10 +7614,12 @@ function drawEditor(p, presetID) {
       url.placeholder = v === "anthropic" ? "https://…" : "https://…/v1";
       fillEndpoints();
       showSearch();
+      showLocal();
     };
     queueMicrotask(() => slide(seg, "api"));
     url = input(draft[apiField[draft.api]], draft.api === "anthropic" ? "https://…" : "https://…/v1", "url");
-    url.oninput = () => { draft[apiField[draft.api]] = url.value; showSearch(); };
+    url.classList.add("base-url");
+    url.oninput = () => { draft[apiField[draft.api]] = url.value; showSearch(); showLocal(); };
     const urlWrap = el("div", "stack");
     urlWrap.append(seg, url);
     // the APIs that answered a detection, taken for the provider: their
@@ -7779,6 +7816,21 @@ function drawEditor(p, presetID) {
     ed.append(...row);
   }
 
+  // a model on this computer or the local network (Ollama, LM Studio, a
+  // vLLM box) may be sent requests unmasked by Settings' redaction (lc on
+  // Discord). Only the user can say it is local all the way: a relay run
+  // locally, or Ollama's cloud models, pass a request on to a vendor
+  const addressOf = (k) => (draft[k] ?? (isNew && pr ? pr[k] : "")) || "";
+  const onLAN = () => !p?.account && (p?.preset || pr?.id) !== "remote-magpie" && localAddresses(["chat", "responses", "anthropic", "decide"].map(addressOf));
+  if (!p?.account) {
+    const [ltk, lcb] = tick(t("Send requests unmasked"), !!draft.unredacted);
+    lcb.onchange = () => { draft.unredacted = lcb.checked; };
+    const row = field(t("Redaction"), ltk, t("For a model running on this computer or your local network: secrets, personal data and your masked words go to it as written. Leave it off for a local relay or proxy that passes requests on to a vendor."));
+    showLocal = () => { for (const e of row) e.style.display = onLAN() ? "" : "none"; };
+    showLocal();
+    ed.append(...row);
+  }
+
   // a vendor that tells the whole account's balance only to a token of its
   // own (AiHubMix's system access token), where a key knows just its own
   // — or a custom provider's, whose Balance URL may not be named yet: a
@@ -7933,7 +7985,7 @@ function drawEditor(p, presetID) {
       const add = (label, key, ph, hint) => {
         if (apiField[draft.api] === key) return;
         const i = input(draft[key], ph, "url");
-        i.oninput = () => { draft[key] = i.value; showSearch(); };
+        i.oninput = () => { draft[key] = i.value; showSearch(); showLocal(); };
         eps.append(...field(t(label), i, t(hint)));
       };
       add("OpenAI URL", "chat", "https://…/v1", "if the vendor also serves chat completions");
@@ -8016,10 +8068,20 @@ function drawEditor(p, presetID) {
     if (isNew && draft.copyOf) body.copyOf = draft.copyOf;
     if (decides || custom) body.decide = (custom && draft.api !== "decide" && !p?.decide ? "" : draft.decide || "").trim();
     if ((body.decide || "").includes(WORKSPACE)) { ed.querySelector(".workspace-id")?.focus({ preventScroll: true }); return editorError(t("Give the workspace ID your API key belongs to, or pick the Token Plan"), "warn"); }
+    if (custom) {
+      // the API picked for the Base URL is saved with it, and one left with
+      // no URL is said rather than lost: the editor would open on another
+      if (!(draft[apiField[draft.api]] || "").trim() && ["chat", "responses", "anthropic", "decide"].some((k) => (draft[k] || "").trim())) {
+        ed.querySelector(".base-url")?.focus({ preventScroll: true });
+        return editorError(t("Base URL: type the {api} URL, or pick the API the URL you have is for", { api: t(API_NAMES[draft.api]) }), "warn");
+      }
+      body.baseAPI = draft.api === "openai" ? "chat" : draft.api;
+    }
     if (custom) { body.icon = draft.icon || "generic"; body.balanceURL = (draft.balanceURL || "").trim(); body.balancePath = (draft.balancePath || "").trim(); body.modelsURL = (draft.modelsURL || "").trim(); }
     if (p) { body.fallback = draft.fallback; body.unlisted = draft.unlisted; body.modelPrefs = modelPrefsOfDraft(); Object.assign(body, routingOfDraft(p)); }
     body.searches = !!draft.searches && searchable();
     body.pinUpstream = !!draft.pinUpstream;
+    body.unredacted = !!draft.unredacted && onLAN();
     const cx = parseContexts(draft.contexts || "");
     if (cx.error) return editorError(t("Context window: {v} is not a length like 128k or 1m", { v: cx.error }), "warn");
     body.contexts = cx.map;
@@ -9695,7 +9757,7 @@ const SUBS = [
   // so does Grok Build
   { agent: "grok", name: "Grok (SuperGrok)", icon: "xai", plans: "SuperGrok · X Premium+", own: true },
   // signed in with GitHub's device code; the editors' own sign-in stays theirs
-  { agent: "copilot", name: "Copilot", icon: "githubcopilot", plans: "Free · Education · Pro · Pro+ · Business · Enterprise", own: true },
+  { agent: "copilot", name: "Copilot", icon: "githubcopilot", plans: "Free · Education · Pro · Pro+ · Max · Business · Enterprise", own: true },
   // Z.ai's GLM Coding Plan, signed in as ZCode does; ZCode's own account is read too
   // sites: where the account is, Z.ai's or BigModel's (智谱), asked before
   // the sign-in opens; a team's plan (团队套餐) is signed in on its site too
@@ -11290,14 +11352,23 @@ function poolWindows(ws) {
     return m ? m[1] * { hour: 1, day: 24, week: 168 }[m[2].toLowerCase()] : Infinity;
   };
   const first = (p) => { const i = FAMILY_FIRST.indexOf(p.split(/[ &]/)[0]); return i < 0 ? FAMILY_FIRST.length : i; };
+  const rest = ws.filter((w) => !isPool(w) && !(w.pool && pools.has(w.pool)));
+  let fam = familyWindows(rest);
   const out = [];
   for (const pool of [...pools.keys()].sort((a, b) => first(a) - first(b))) {
     const members = ws.filter((w) => w.family && w.pool === pool);
-    for (const w of pools.get(pool).sort((a, b) => hours(a) - hours(b)))
-      out.push({ ...w, name: pool + " · " + t(w.name), window: w.name, members });
+    const own = pools.get(pool).sort((a, b) => hours(a) - hours(b));
+    // a pool read without its 5 hours (#745) keeps its models' own 5-hour
+    // windows as families: they go in the pool's place, before its week,
+    // so the card reads in the same order whether or not the summary sent
+    // the 5 hours this time (#860: 5h and 7d swapped after a refresh)
+    if (!own.some((w) => hours(w) === 5)) {
+      const mine = (w) => { const f = w.tiers ? w.name : w.family; return !!f && pool.toLowerCase().includes(f.toLowerCase()); };
+      out.push(...fam.filter(mine));
+      fam = fam.filter((w) => !mine(w));
+    }
+    for (const w of own) out.push({ ...w, name: pool + " · " + t(w.name), window: w.name, members });
   }
-  const rest = ws.filter((w) => !isPool(w) && !(w.pool && pools.has(w.pool)));
-  const fam = familyWindows(rest);
   return out.concat(fam);
 }
 // pooledModels: the models a whole account's card lists under "Every model"
@@ -11697,11 +11768,16 @@ function keyFoldRows(p, fold) {
   q.className = "keys-filter";
   q.dataset.provider = p.id;
   q.setAttribute("aria-label", q.placeholder);
+  // typing redraws the keys list around the filter, which stays in the
+  // page: taken out and put back, an IME's text lands twice (#1055)
   q.oninput = () => {
     keysOpen[p.id].q = q.value;
-    const at = q.selectionStart;
-    renderProviders();
-    focusKeyFilter(p.id, at);
+    const list = q.closest(".accts.keys"), fresh = renderKeyAccounts(p);
+    const fbar = fresh.querySelector(".keys-tools"), fq = fbar?.querySelector(".keys-filter");
+    if (!list || !fq) { renderProviders(); return; }
+    replaceKeeping(bar, [...fbar.childNodes].map((n) => n === fq ? q : n));
+    list.className = fresh.className;
+    replaceKeeping(list, [...fresh.childNodes].map((n) => n === fbar ? bar : n));
   };
   q.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Escape") { if (q.value) q.oninput(q.value = ""); else { delete keysOpen[p.id]; renderProviders(); } } };
   const count = el("span", "hint keys-count", fold.matched.length === all.length ? t("{n} keys", { n: all.length }) : t("{n} of {m} keys", { n: fold.matched.length, m: all.length }));
@@ -11733,11 +11809,8 @@ function keyFoldRows(p, fold) {
   else if (fold.matched.length > fold.shown.length) after.push(el("div", "hint keys-rest", t("{n} more — type to narrow them down", { n: fold.matched.length - fold.shown.length })));
   return { before: [bar], after };
 }
-function focusKeyFilter(id, at) {
-  const q = document.querySelector(`.keys-filter[data-provider="${CSS.escape(id)}"]`);
-  if (!q) return;
-  q.focus({ preventScroll: true });
-  if (at != null) q.setSelectionRange(at, at);
+function focusKeyFilter(id) {
+  document.querySelector(`.keys-filter[data-provider="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
 }
 
 // splitKeys is the keys in text pasted at once, as provider.SplitKeys
@@ -11926,6 +11999,8 @@ async function keyFingerprint(key) {
 // apiField is the draft's URL a custom provider's base URL fills, by the
 // protocol chosen for it.
 const apiField = { openai: "chat", responses: "responses", anthropic: "anthropic", decide: "decide" };
+// the Base URL's APIs as the custom provider's editor names them
+const API_NAMES = { openai: "OpenAI compatible", responses: "OpenAI Responses", anthropic: "Anthropic compatible", decide: "System One" };
 
 // respellURL turns a base URL into the one protocol api is asked at: the
 // root for Anthropic, which adds /v1 itself, …/v1 for OpenAI's two.
@@ -13279,14 +13354,15 @@ if (mode === "panel") {
 // the chart then tells its models apart. A click on someone in the ranking
 // picks them; "Open Usage" takes the window to their requests.
 let panelUse = null; // the answer for the period, and provider, shown
+// the window's Usage periods, All among them (#860)
+const PANEL_USE_PERIODS = [["today", "Today"], ["7d", "7 days"], ["30d", "30 days"], ["all", "All"]];
 let panelUsePeriod = "today", panelUseProvider = "", panelUseMetric = "tokens", panelUseComputer = "", panelUseDay = "";
 try {
   const p = localStorage.getItem("magpie.panelUsePeriod"), m = localStorage.getItem("magpie.panelUseMetric");
-  if (["today", "7d", "30d"].includes(p)) panelUsePeriod = p;
+  if (PANEL_USE_PERIODS.some(([id]) => id === p)) panelUsePeriod = p;
   if (["tokens", "cost", "calls"].includes(m)) panelUseMetric = m;
 } catch {}
 let panelUseAt = 0;
-const PANEL_USE_PERIODS = [["today", "Today"], ["7d", "7 days"], ["30d", "30 days"]];
 
 // One read at a time: a 10 s timer must not start a second behind a slow one,
 // and a read asked for while one is (a period or a provider picked, the tab
@@ -15287,7 +15363,7 @@ const ledGrow = new ResizeObserver(() => {
   ledGrowFrame = requestAnimationFrame(() => {
     ledGrowFrame = 0;
     const wrap = $("#ledWrap"), table = wrap.querySelector("table.led");
-    if (table && !table.classList.contains("tight") && wrap.clientWidth && wrap.scrollWidth > wrap.clientWidth + 1) ledFit();
+    if (table && !table.classList.contains("tighter") && wrap.clientWidth && wrap.scrollWidth > wrap.clientWidth + 1) ledFit();
     ledHScroll();
   });
 });
@@ -15323,9 +15399,14 @@ function ledFit() {
   const wrap = $("#ledWrap"), table = wrap.querySelector("table.led");
   let hint = $("#ledTight");
   if (!table) { if (hint) hint.hidden = true; return; }
-  table.classList.remove("tight");
-  const tight = wrap.scrollWidth > wrap.clientWidth + 1;
+  table.classList.remove("tight", "tighter");
+  const over = () => wrap.scrollWidth > wrap.clientWidth + 1;
+  const tight = over();
   table.classList.toggle("tight", tight);
+  // still too wide (#860: a Windows window at 175%, its wider fonts): the
+  // price reference line goes too, in the cost's tooltip and the details
+  // as well, and names are cut shorter, whole in their tooltips
+  if (tight && over()) table.classList.add("tighter");
   if (!hint) {
     hint = el("span", "led-tight");
     hint.id = "ledTight";
@@ -15607,6 +15688,22 @@ try { const k = localStorage.getItem("magpie.usageTab"); if (USAGE_TABS.some(([i
 let sessions = null; // { sessions, terminal, dirs }
 let sessAgent = "all";
 let sessQuery = "";
+// The list is drawn in pages: every session is read (so the count beside it
+// and the list agree), but a filter click or a keystroke in Search draws
+// SESS_PAGE rows and no more, and "Show N more" appends the next page. A
+// history of thousands rebuilt whole on every keystroke took ~300ms a
+// keystroke on a fast Mac (yetone, #1019). sessShown resets to one page
+// whenever the filters change, so what is drawn never grows with the history.
+const SESS_PAGE = 200;
+let sessShown = SESS_PAGE;
+// What the last draw put in the list, for the note under it to say: drawn is
+// the rows drawn and total the rows the filters kept — the same list, so a
+// search that matches one session says "1 session", never "1 of 2600" (the
+// note is about the list, not about every session on the computer).
+let sessDrawn = null, sessTotal = null;
+// what the drawn list was filtered by, so a redraw from the same filters
+// keeps the pages opened and a changed one starts again at the first
+let sessListKey = null;
 // The totals and the chart are every session's, by day, over a range; the
 // list is the latest sessions within it. [id, name, days (0: all)]
 const SESS_RANGES = [["today", "Today", 1], ["7d", "7 days", 7], ["30d", "30 days", 30], ["90d", "90 days", 90], ["all", "All", 0]];
@@ -16196,6 +16293,8 @@ function renderSessions() {
     box.hidden = true;
     chart.hidden = true;
     grid.hidden = true;
+    sessDrawn = 0;
+    sessTotal = 0;
     // the search stays where it was typed, to be cleared
     head.hidden = !q;
   } else {
@@ -16237,11 +16336,37 @@ function renderSessions() {
     renderSessSkills();
     head.hidden = !list.length && !q;
     box.hidden = !list.length && !q;
-    for (const s of list) box.append(sessionItem(s));
+    // a page of the list, not all of it: the same filters keep the pages
+    // opened, a changed one starts at the first (see sessListKey)
+    const key = [sessAgent, sessModel, sessFolder, sessRange, q].join("\0");
+    if (key !== sessListKey) { sessListKey = key; sessShown = SESS_PAGE; }
+    const page = list.slice(0, sessShown);
+    sessDrawn = page.length;
+    sessTotal = list.length;
+    for (const s of page) box.append(sessionItem(s));
+    if (list.length > page.length) {
+      const more = el("button", "text sess-page-more");
+      more.textContent = t("Show {n} more", { n: Math.min(SESS_PAGE, list.length - page.length) });
+      more.onclick = () => { sessShown += SESS_PAGE; renderSessions(); };
+      box.append(more);
+    }
     if (!list.length && q) box.append(el("div", "empty-state", t("No session matches.")));
   }
   const dirs = (sessions?.dirs || []).join(" · ");
-  $("#sessNote").textContent = t("Totals count every session in the agents' own files; the list is the latest {n} by activity · {dirs}", { n: all.length, dirs });
+  // The list is every session the filters keep, drawn in pages, so the note
+  // counts that list and not every session on the computer: a search that
+  // matches one session says "1 session", not "1 of 2600", which read as if
+  // the rest were behind a "Show more" that isn't there (yetone, #1019).
+  // Nothing left to draw, the note is just the list's length, in words a
+  // reader uses: one session is a session, not "1 sessions".
+  const parts = [t("Totals count every session in the agents' own files")];
+  if (sessDrawn !== null) {
+    parts.push(sessDrawn < sessTotal
+      ? t("showing {drawn} of {n}", { drawn: sessDrawn, n: sessTotal })
+      : t(sessTotal === 1 ? "{n} session" : "{n} sessions", { n: sessTotal }));
+  }
+  if (dirs) parts.push(dirs);
+  $("#sessNote").textContent = parts.join(" · ");
 }
 
 // sessSums adds up usage rows by one of their fields, the most tokens first
@@ -17542,6 +17667,7 @@ function renderSettings() {
   renderOTel(s, keep);
   renderPort(s);
   renderLAN(s);
+  renderCORS(s);
   renderSync();
 
   const about = $("#about");
@@ -17819,6 +17945,25 @@ function syncWhen(iso) {
   const d = new Date(iso);
   const time = d.toLocaleTimeString(intlLang(), { hour: "2-digit", minute: "2-digit" });
   return new Date().toDateString() === d.toDateString() ? t("at {time}", { time }) : d.toLocaleDateString(intlLang()) + " " + time;
+}
+
+// localAddresses: every address given is on this computer or the local
+// network (localhost, *.local, a loopback or private IP), as
+// provider.LocalAddresses says, and there is at least one
+function localAddresses(urls) {
+  const given = urls.map((u) => (u || "").trim()).filter(Boolean);
+  return given.length > 0 && given.every((u) => {
+    let h;
+    try { h = new URL(u).hostname.toLowerCase(); } catch { return false; }
+    if (h.startsWith("[")) h = h.slice(1, -1);
+    if (h === "localhost" || h.endsWith(".local") || h === "::1") return true;
+    const v4 = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (v4) {
+      const a = +v4[1], b = +v4[2];
+      return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+    }
+    return /^f[cd][0-9a-f]{2}:/.test(h);
+  });
 }
 
 function tick(label, on) {
@@ -18921,6 +19066,60 @@ function renderPort(s) {
   val.append(field, save);
   r.append(who, val);
   box.replaceChildren(r); // swapped whole: the list is never laid out empty
+}
+
+// renderCORS: the web pages whose scripts may call the gateway from a
+// browser (#1051), by origin — a row to add one, and one row each to take
+// it away. A page listed calls with a gateway key; none listed, no page
+// can read what the gateway answers, as before.
+let corsDraft = { value: "", err: "" };
+// corsSays is the gateway's word on an origin it didn't take, in the
+// page's language
+function corsSays(m) {
+  if (/wildcard/.test(m)) return t("Name each origin: a wildcard would let every web page use magpie");
+  if (/is not an origin/.test(m)) return t("Write an origin as http://localhost:3000 or https://app.example.com");
+  return t(m);
+}
+function renderCORS(s) {
+  const box = $("#corsList");
+  box.replaceChildren();
+  const origins = s.corsOrigins || [];
+  const d = corsDraft;
+  const set = (next, done) => writingPrefs(api("settings/cors", { origins: next }))
+    .then((ns) => { prefs = ns; d.err = ""; done?.(); renderSettings(); status(t("Saved"), "ok", 1500); })
+    .catch((e) => { d.err = corsSays(e.message); status(d.err, "err"); renderSettings(); });
+  const field = input(d.value, "http://localhost:3000");
+  field.className = "words rule-match";
+  field.setAttribute("aria-label", t("Web page origin"));
+  field.autocomplete = "off";
+  field.spellcheck = false;
+  const add = el("button", "text", t("Add"));
+  add.onclick = () => {
+    d.value = field.value.trim();
+    if (!d.value) return field.focus();
+    set([...origins, d.value], () => { corsDraft = { value: "", err: "" }; });
+  };
+  field.oninput = () => { d.value = field.value; };
+  field.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") add.onclick(); };
+  const r = el("div", "row pref rule-row");
+  const who = el("div", "who");
+  who.append(el("div", "name", t("Web pages that may call magpie")),
+    el("div", "sub" + (d.err ? " err" : ""), d.err || t("Scripts on these origins can call the gateway from a browser, each request with a gateway key from Gateway. A page from any other site is refused; pages on this computer are not")));
+  const val = el("div", "val rule-add");
+  val.append(field, add);
+  r.append(who, val);
+  box.append(r);
+  for (const o of origins) {
+    const row = el("div", "row pref");
+    const w = el("div", "who");
+    w.append(el("div", "name", o));
+    const x = el("button", "text", t("Remove"));
+    x.onclick = () => set(origins.filter((v) => v !== o));
+    const v = el("div", "val");
+    v.append(x);
+    row.append(w, v);
+    box.append(row);
+  }
 }
 
 // renderLAN: the gateway shared on the local network, for agents on other

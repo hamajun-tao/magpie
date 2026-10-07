@@ -627,7 +627,7 @@ func (b *subscriptionBridge) start(ctx context.Context, req *Request, model, con
 		run.mu.Lock()
 		run.sessionID = from.session
 		run.mu.Unlock()
-		prompt = renderClaudeTurn(req.Messages[len(req.Messages)-len(from.since):])
+		prompt = renderClaudeTurn(req.Messages[len(req.Messages)-len(from.since):], req.Tools)
 	} else if prompt, err = renderClaudePrompt(req); err != nil {
 		run.abort()
 		return nil, nil, err
@@ -764,7 +764,7 @@ func (b *subscriptionBridge) resume(req *Request, owner string) (*subscriptionRu
 	// the message's id is the turn's, to rewind to if the client gives up
 	// on it
 	turn := newUUID()
-	line, _ := json.Marshal(map[string]any{"type": "user", "uuid": turn, "message": map[string]any{"role": "user", "content": renderClaudeTurn(since)}})
+	line, _ := json.Marshal(map[string]any{"type": "user", "uuid": turn, "message": map[string]any{"role": "user", "content": renderClaudeTurn(since, req.Tools)}})
 	run.mu.Lock()
 	if run.closed {
 		run.mu.Unlock()
@@ -2239,7 +2239,7 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 		case req.ToolChoice == "required":
 			text.WriteString("\nYou must call at least one available tool before answering.")
 		case strings.HasPrefix(req.ToolChoice, "name:"):
-			fmt.Fprintf(&text, "\nYou must call the %s tool.", strings.TrimPrefix(req.ToolChoice, "name:"))
+			fmt.Fprintf(&text, "\nYou must call the %s tool.", bridgeName(strings.TrimPrefix(req.ToolChoice, "name:")))
 		}
 		text.WriteString("\n</external_system_instructions>\n\n")
 		// The caller's instructions are a block of their own, marked for the
@@ -2252,16 +2252,37 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 		blocks = append(blocks, map[string]any{"type": "text", "text": text.String(), "cache_control": map[string]string{"type": "ephemeral", "ttl": "1h"}})
 		text.Reset()
 	}
+	offered := offeredTools(req.Tools)
 	for _, m := range req.Messages {
 		label := "Human"
 		if m.Role == "assistant" {
 			label = "Assistant"
 		}
 		text.WriteString(label + ": ")
-		blocks = renderParts(blocks, &text, m.Parts)
+		blocks = renderParts(blocks, &text, m.Parts, offered)
 		text.WriteString("\n\n")
 	}
 	return closeBlocks(blocks, &text), nil
+}
+
+// bridgeName is the name the run's Claude Code has a tool of the caller's
+// under: the MCP helper's (bridgeTools). Its built-ins are off (--tools
+// ""), so a call of the bare name is answered by Claude Code itself with
+// "Bash is disabled for this session, in subagents as well as here.",
+// which the model takes for a fact and gives up (#958).
+func bridgeName(name string) string {
+	return "mcp__magpie__" + name
+}
+
+// offeredTools is the names of the caller's tools, whose past calls a run
+// is told under bridgeName: a conversation told in text with hundreds of
+// calls of the bare names had the model call those, not the run's.
+func offeredTools(tools []Tool) map[string]bool {
+	offered := make(map[string]bool, len(tools))
+	for _, t := range tools {
+		offered[t.Name] = true
+	}
+	return offered
 }
 
 // withoutBillingHeader is a system prompt without the billing line Claude
@@ -2285,10 +2306,11 @@ var billingHeader = regexp.MustCompile(`^x-anthropic-billing-header:(\s*[A-Za-z_
 // as they are; with the client's own calls among them (nextTurn), each is
 // labeled with who said it, as a run started anew is told the conversation
 // (renderClaudePrompt).
-func renderClaudeTurn(msgs []Message) []map[string]any {
+func renderClaudeTurn(msgs []Message, tools []Tool) []map[string]any {
 	var blocks []map[string]any
 	var text strings.Builder
 	labeled := hasReply(msgs)
+	offered := offeredTools(tools)
 	for i, m := range msgs {
 		if i > 0 {
 			text.WriteString("\n\n")
@@ -2300,12 +2322,15 @@ func renderClaudeTurn(msgs []Message) []map[string]any {
 			}
 			text.WriteString(label + ": ")
 		}
-		blocks = renderParts(blocks, &text, m.Parts)
+		blocks = renderParts(blocks, &text, m.Parts, offered)
 	}
 	return closeBlocks(blocks, &text)
 }
 
-func renderParts(blocks []map[string]any, text *strings.Builder, parts []Part) []map[string]any {
+// renderParts writes the parts as text, a call of one of the offered tools
+// under the name the run can call it by (bridgeName). A call of a tool the
+// caller doesn't offer (its framework's own) keeps its name.
+func renderParts(blocks []map[string]any, text *strings.Builder, parts []Part, offered map[string]bool) []map[string]any {
 	for _, p := range parts {
 		switch p.Kind {
 		case Text:
@@ -2315,7 +2340,11 @@ func renderParts(blocks []map[string]any, text *strings.Builder, parts []Part) [
 		case Thinking:
 			text.WriteString(p.Text)
 		case ToolCall:
-			fmt.Fprintf(text, "\n[tool call %s id=%s args=%s]", p.Name, p.ID, argsString(p))
+			name := p.Name
+			if offered[name] {
+				name = bridgeName(name)
+			}
+			fmt.Fprintf(text, "\n[tool call %s id=%s args=%s]", name, p.ID, argsString(p))
 		case ToolResult:
 			fmt.Fprintf(text, "\n[tool result id=%s%s]\n%s", p.CallID, map[bool]string{true: " error"}[p.IsError], p.Text)
 			// the images the tool returned follow its text

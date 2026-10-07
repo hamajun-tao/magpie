@@ -253,6 +253,11 @@ The gateway issues **gateway keys** for clients, separate from a provider's
 upstream API keys. Turn on **Settings → Share on local network**, then open
 **Gateway → Gateway keys → Add gateway key**. This block appears only while
 sharing is on. Create a named key for each client and copy it from its row.
+To move from another gateway without touching its clients, enter the key they
+already send in **Your own key (optional)** (8–256 characters, no spaces, not
+starting with `sk-magpie-`, unlike any other key); left empty, magpie makes
+one. The list shows only its last four characters, and it is counted,
+limited and restricted as any other key, from this computer too.
 Rename, disable, rotate or remove keys independently; rotation and removal
 ask for confirmation. Rotation keeps the name, enabled state and usage
 history; other keys are unchanged. While sharing is on, **Gateway → Connect**
@@ -265,6 +270,7 @@ For a headless gateway, use the CLI before exposing the port:
 
 ```sh
 magpie gateway-key add "Remote laptop" # prints the new credential once
+magpie gateway-key add Family --key -  # keeps a key clients already send, read from stdin
 magpie gateway-key list                # ids, names, enabled state and masked keys
 magpie gateway-key rotate <id>         # prints the replacement; identity stays the same
 magpie gateway-key remove <id>         # revokes remote access
@@ -339,6 +345,10 @@ permissive: any token works, including a stale or disabled gateway key.
 Only a valid, enabled key is attributed to its named identity.
 Without sharing, an explicitly exposed `MAGPIE_ADDR` keeps its original open
 access, including old `sk-magpie-…` tokens, without key authentication.
+Sharing listens on every interface, unless `MAGPIE_ADDR` names a host of its
+own: `MAGPIE_ADDR=127.0.0.1:3425` behind Tailscale Serve, or one interface's
+address, stays where it is while shared, and what reaches it from elsewhere
+still needs an enabled gateway key (#1112).
 
 A request that reaches loopback through a proxy or tunnel on this computer
 (Cloudflare Tunnel's `cloudflared`, ngrok, Tailscale serve or funnel, frp's
@@ -1678,7 +1688,9 @@ MAGPIE_GITHUB_MIRROR=https://gh.example magpie serve
 - `~/.config/magpie/stash.json` — values magpie replaced, restored on switch-back
 - `~/.config/magpie/plugins.json`, `plugins/` — the plugins added, and their packages
 - `~/.config/magpie/plugin-auth.json` — the plugins' sign-ins (0600)
-- `~/.cache/magpie/bun/` — the Bun plugins run on
+- `~/.cache/magpie/bun/<version>/magpie-bun` — the Bun plugins run on, named
+  so that a proxy app's PROCESS-NAME rule can match it (`magpie-bun.exe` on
+  Windows)
 - `~/.cache/magpie/models.json` — models.dev catalog (OpenCode's cache at
   `~/.cache/opencode/models.json` is used when present)
 - `~/.cache/magpie/models/<provider>.json` — model lists fetched from vendors

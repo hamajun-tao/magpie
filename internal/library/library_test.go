@@ -20,6 +20,7 @@ import (
 	"github.com/tidwall/jsonc"
 
 	"github.com/yetone/magpie/internal/agentenv"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 // sandbox is a home with every agent magpie can give the library to, and
@@ -32,8 +33,7 @@ func sandbox(t *testing.T) string {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(h, ".config"))
 	// Gemini CLI is found by its binary alone
 	bin := filepath.Join(h, "bin")
-	write(t, filepath.Join(bin, "gemini"), "#!/bin/sh\n")
-	os.Chmod(filepath.Join(bin, "gemini"), 0o755)
+	testenv.Program(t, filepath.Join(bin, "gemini"), "#!/bin/sh\n")
 	write(t, filepath.Join(bin, "gemini.exe"), "")
 	t.Setenv("PATH", bin)
 	// never the machine's global node_modules

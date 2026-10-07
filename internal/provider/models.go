@@ -1359,6 +1359,9 @@ func (p Provider) ReplyLimit(m catalog.Model) int {
 	return p.replyLimit(m, settings.Load())
 }
 
+// ReplyLimitIn is ReplyLimit from settings s already read.
+func (p Provider) ReplyLimitIn(m catalog.Model, s settings.Settings) int { return p.replyLimit(m, s) }
+
 func (p Provider) replyLimit(m catalog.Model, s settings.Settings) int {
 	output := m.Output
 	if output == 0 {

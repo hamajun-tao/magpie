@@ -1775,6 +1775,7 @@
       if (all.length) body.append(skillHowBar());
       if (picking) body.append(pickBar(all));
     }
+    if (lib.newSkills?.length) renderNewSkills(body);
     if (lib.foundSkills.length) {
       const rh = el("div", "row-head");
       rh.append(el("span", "label", t("In your agents")), el("span", "grow"), el("span", "note", t("not in the library — bring one in to give it to the others")));
@@ -1804,6 +1805,64 @@
       body.append(el("p", "lib-aside", t("Claude Desktop shows skill changes once its window is reloaded ({keys}). It gets a copy of each skill, and one you change in Desktop is left as it is.", { keys: /^Mac/.test(navigator.platform) ? "⌘R" : "Ctrl+R" })));
     }
     body.append(discover("skills"));
+  }
+
+  // Skills a check for updates found in the GitHub repositories the
+  // library's skills came from, beside them, that the library doesn't have:
+  // ones a repository added since, or one the picker showed and wasn't
+  // picked before magpie kept which it showed. Each is added for the agents
+  // that have its repository's others, or set aside so a check doesn't
+  // offer it again.
+  function renderNewSkills(body) {
+    const list = lib.newSkills;
+    const rh = el("div", "row-head lib-newhead");
+    rh.append(el("span", "label", t("Also in their repositories")), el("span", "grow"), el("span", "note", t("on GitHub beside skills you have, not in the library yet")));
+    if (list.length > 1) {
+      const ids = list.map((n) => n.id);
+      const ign = button(t("Ignore all"), "lib-updall", () => change("skills/ignore-new", { names: ids }, t("{n} skills set aside", { n: ids.length })));
+      ign.title = t("A check for updates won't offer these again");
+      const add = button(t("Add all"), "action lib-updall", async (e, b) => {
+        b.classList.add("busy");
+        b.textContent = t("Adding…");
+        await change("skills/add-new", { names: ids }, t("{n} skills added", { n: ids.length }));
+        b.classList.remove("busy");
+        b.textContent = t("Add all");
+      });
+      add.title = t("Adds the {n} skills, each for the agents that have its repository's other skills", { n: ids.length });
+      rh.append(ign, add);
+    }
+    body.append(rh);
+    const box = el("div", "list lib-list lib-newskills");
+    for (const n of list) box.append(newSkillRow(n));
+    body.append(box);
+  }
+
+  function newSkillRow(n) {
+    const row = el("div", "row lib-row lib-newskill");
+    const who = el("div", "who");
+    who.append(el("div", "name", n.name));
+    const sub = el("div", "sub", n.description || "");
+    sub.title = n.description || "";
+    who.append(sub);
+    const src = el("div", "lib-src");
+    const a = el("a", "lib-srclink", n.repo + "/" + n.path);
+    a.href = n.id;
+    a.onclick = (e) => { e.preventDefault(); e.stopPropagation(); browse(n.id); };
+    src.append(a);
+    who.append(src);
+    const have = el("div", "lib-have");
+    for (const id of n.agents) { const ag = agentOf(id); if (ag) { const i = agentIcon(ag.icon); i.title = ag.name; have.append(i); } }
+    const ign = button(t("Ignore"), "", () => change("skills/ignore-new", { names: [n.id] }, t("{name} set aside", { name: n.name })));
+    ign.title = t("A check for updates won't offer it again");
+    const add = button(t("Add"), "action", async (e, b) => {
+      b.classList.add("busy");
+      await change("skills/add-new", { names: [n.id] }, t("{name} is in the library now", { name: n.name }));
+      b.classList.remove("busy");
+    });
+    const names = n.agents.map(nameOf).join(", ");
+    add.title = names ? t("Adds it to the library for {agents}, which have its repository's other skills", { agents: names }) : t("Adds it to the library");
+    row.append(glyph(GLYPH.skill), who, have, ign, add);
+    return row;
   }
 
   // ---------- the library's skills, by where they came from ----------
@@ -3125,6 +3184,8 @@
       const n = got.filter((s) => s.check.status === "update").length;
       const unknown = got.filter((s) => s.check.status === "unknown");
       let msg = n ? (n === 1 ? t("1 skill has an update") : t("{n} skills have updates", { n })) : t("Every skill is up to date");
+      const more = lib.newSkills?.length || 0;
+      if (more) msg += " · " + (more === 1 ? t("1 more skill in their repositories") : t("{n} more skills in their repositories", { n: more }));
       if (unknown.length) {
         msg += " · " + t("{n} couldn't be checked: {error}", { n: unknown.length, error: checkError(unknown[0].check) });
         status(msg, "warn", 8000);

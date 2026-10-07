@@ -396,6 +396,10 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			res, err = library.GroupSkills(in.Old, in.Name, in.Names)
 		case "skills/ungroup":
 			res, err = library.UngroupSkills(in.Name, in.Names)
+		case "skills/add-new":
+			res, err = library.AddNewSkills(in.Names)
+		case "skills/ignore-new":
+			err = library.IgnoreNewSkills(in.Names)
 		case "skills/import":
 			res, err = library.ImportSkill(in.Name)
 		case "skills/import-all":

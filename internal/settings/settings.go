@@ -85,6 +85,12 @@ type Settings struct {
 	// named caller keys. LANKey is retained for older Magpie versions.
 	LAN    bool   `json:"lan,omitempty"`
 	LANKey string `json:"lanKey,omitempty"`
+	// CORSOrigins are the web pages (scheme://host[:port]) whose scripts
+	// may call the gateway from a browser (#1051): a preflight from one is
+	// answered, and its calls carry the CORS headers that let it read the
+	// reply, each with an enabled gateway key. None by default: a page
+	// gets no CORS headers, as before.
+	CORSOrigins []string `json:"corsOrigins,omitempty"`
 	// Port is the gateway's port on this computer, 0 for DefaultPort.
 	// MAGPIE_ADDR, where it is set, comes first (GatewayAddr).
 	Port int `json:"port,omitempty"`

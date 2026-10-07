@@ -744,3 +744,37 @@ func TestDshCheckSaysWhenNoCatalogAndAProfileHasNoRoute(t *testing.T) {
 		t.Fatalf("a profile without magpie's route and without magpie's start is not said: %q", d)
 	}
 }
+
+// yetone's review of #1029, the branch left untested: with no catalog there is
+// nothing a round could write back, so a second profile whose start names one
+// of magpie's models is said too — `canWriteBack` must stay false here (set it
+// true and this test fails: the profile would be passed over in silence).
+func TestDshCheckSaysWhenNoCatalogAndAProfilesStartIsMagpies(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("DSH_HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	// no provider: no catalog to write the route from
+	dir := filepath.Join(home, ".dsh")
+	web := filepath.Join(dir, "profiles", "web", "cordis.patch.yml")
+	cli := filepath.Join(dir, "profiles", "cli", "cordis.patch.yml")
+	os.MkdirAll(filepath.Dir(web), 0o755)
+	os.MkdirAll(filepath.Dir(cli), 0o755)
+	dshKeyFixture(dir)
+	// web: magpie's route in it, and the start on magpie's
+	os.WriteFile(web, []byte("# Your patch layer for this dsh profile.\n"+
+		"- id: llm-pi-ai\n  name: \"@deepseek-ai/dsh-llm-pi-ai\"\n  config:\n    providers:\n"+
+		"      magpie:\n        displayName: Magpie\n        apiKeyEnv: "+dshKeyRef+"\n        api: openai-completions\n        baseURL: http://127.0.0.1:3425/v1\n        models:\n          - id: deepseek/flash\n"+
+		"- id: agent-default-model # magpie\n  config:\n    provider: magpie\n    model: deepseek/flash\n"), 0o644)
+	// cli: no route of its own, and its start names one of magpie's — the shape
+	// dsh's own save leaves, which a round would write back were there a catalog
+	os.WriteFile(cli, []byte("# Your patch layer for this dsh profile.\n"+
+		"- id: agent-default-model # magpie\n  config:\n    provider: magpie\n    model: deepseek/flash\n"), 0o644)
+
+	d := dsh(home).Check()
+	if !strings.Contains(d, "cli profile") || !strings.Contains(d, "none of magpie's models") {
+		t.Fatalf("with no catalog, a stripped profile of magpie's own start is not said: %q", d)
+	}
+}

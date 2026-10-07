@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf16"
 
 	"github.com/yetone/magpie/internal/appdir"
 )
@@ -123,6 +125,53 @@ func dshFiles() []file {
 		out[i].main = parent[out[i].sid] == ""
 	}
 	return out
+}
+
+// dshSessionDir is the folder dsh keeps a session file's session in, all
+// of it that session's own: <sessions>/<project>/<the id, escaped>/, with
+// the session's generations and its session.lock. "" when the file isn't
+// in the folder its id names, so a delete never takes another's.
+func dshSessionDir(f file) string {
+	if f.agent != "dsh" || f.sid == "" {
+		return ""
+	}
+	d := filepath.Dir(f.path)
+	if filepath.Base(d) != dshSegment(f.sid) || filepath.Dir(filepath.Dir(d)) != filepath.Join(DshDir(), "sessions") {
+		return ""
+	}
+	return d
+}
+
+// dshSegment is a session id as dsh names its folder (encodeSegment in
+// dsh-session-persistence-jsonl): A–Z, a–z, 0–9, '.', '_' and '-' kept,
+// every other UTF-16 unit ~XXXX, and "." and ".." escaped whole.
+func dshSegment(id string) string {
+	switch id {
+	case ".":
+		return "~002E"
+	case "..":
+		return "~002E~002E"
+	}
+	var b strings.Builder
+	for _, u := range utf16.Encode([]rune(id)) {
+		if u < 0x80 && (u >= 'A' && u <= 'Z' || u >= 'a' && u <= 'z' || u >= '0' && u <= '9' || u == '.' || u == '_' || u == '-') {
+			b.WriteByte(byte(u))
+		} else {
+			fmt.Fprintf(&b, "~%04X", u)
+		}
+	}
+	return b.String()
+}
+
+// dshCacheRecord is the row dsh's session listing caches of a session
+// (dsh-session-projection-cache, on dsh-storage-json's per-record layout):
+// <dsh>/storages/session_projcache/sessions/<id>.json. "" for an id that
+// layout can't hold.
+func dshCacheRecord(id string) string {
+	if !safeID.MatchString(id) {
+		return ""
+	}
+	return filepath.Join(DshDir(), "storages", "session_projcache", "sessions", id+".json")
 }
 
 // dshOpen reads a session file's lines, decompressed.
