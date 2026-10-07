@@ -154,7 +154,8 @@ func TestCodexExecutableOffPath(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 			t.Setenv("USERPROFILE", home)
-			t.Setenv("PATH", "/usr/bin:/bin")
+			// Keep a Codex installed on the test machine out of this off-PATH fixture.
+			t.Setenv("PATH", t.TempDir())
 			os.WriteFile(filepath.Join(home, ".npmrc"), []byte("registry=https://registry.npmjs.org/\nprefix = ~/custom-npm\n"), 0o644)
 			exe := filepath.Join(home, dir, "codex")
 			os.MkdirAll(filepath.Dir(exe), 0o755)
