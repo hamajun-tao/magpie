@@ -133,9 +133,24 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       // 1111 of them name "Session 1" ("1", "1x", "1xx", "1xxx"), so the note
       // counts that list — 200 of 1111, not of the 2600 on the computer
       const q = page.locator("#sessQ");
-      const at = Date.now();
+      // Measure the input handler and its layout in the browser. Playwright's
+      // fill also waits for actionability and crosses the driver connection;
+      // those waits vary by host and are not time spent drawing the session list.
+      await q.evaluate((input) => {
+        const handle = input.oninput;
+        if (typeof handle !== "function") throw new Error("session search has no input handler");
+        input.oninput = function (event) {
+          const at = performance.now();
+          try {
+            return handle.call(this, event);
+          } finally {
+            document.querySelector("#sessList").getBoundingClientRect();
+            window.sessionInputMilliseconds = performance.now() - at;
+          }
+        };
+      });
       await q.fill("Session 1");
-      const took = Date.now() - at;
+      const took = await page.evaluate(() => window.sessionInputMilliseconds);
       assert(await rows.count() <= 200, "a search draws a page, not the history");
       assert.equal(await rows.count(), 200, "a page of the matches");
       assert.match(await page.locator("#sessNote").innerText(), w.showing(200, 1111));
