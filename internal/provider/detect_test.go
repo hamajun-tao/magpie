@@ -159,7 +159,7 @@ func TestResponsesProbesUseArrayInput(t *testing.T) {
 			}
 			if in.Model != model || len(in.Input) != 1 || in.Input[0].Type != "message" ||
 				in.Input[0].Role != "user" || len(in.Input[0].Content) != 1 ||
-				in.Input[0].Content[0].Type != "input_text" || in.Input[0].Content[0].Text != "hi" {
+				in.Input[0].Content[0].Type != "input_text" || in.Input[0].Content[0].Text != "不要问为什么，只回复ok" {
 				http.Error(w, `{"error":{"message":"expected a user text message"}}`, http.StatusBadRequest)
 				return
 			}

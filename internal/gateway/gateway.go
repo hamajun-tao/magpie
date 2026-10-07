@@ -400,6 +400,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// the magpie serving the gateway, and only it, keeps the saved accounts
 	// signed in, so two never refresh one sign-in at once
 	go provider.KeepLoginsAlive(ctx)
+	go provider.KeepModelsHealthy(ctx)
 	// and signs Codex and Claude Code in to their next account when the
 	// one they are on is spent
 	go provider.KeepOnAnAccountWithRoom(ctx)
@@ -1502,6 +1503,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		turnedAway()
 		return
 	}
+	if len(cands) == 0 && slices.ContainsFunc(pl.left, func(w Weighed) bool { return w.HealthHeld }) {
+		call.Status, call.Error = 503, "no model passed health checks"
+		writeError(w, from, 503, "no model passed health checks; choose a healthy model or run magpie provider health scan")
+		turnedAway()
+		return
+	}
 	if len(cands) == 0 && len(pl.left) > 0 && !slices.ContainsFunc(pl.left, func(w Weighed) bool { return !w.Barred }) {
 		// every account or key there is was set not to serve the model
 		call.Status, call.Error = 403, "every account barred"
@@ -2380,6 +2387,11 @@ func sinceStart(before, d time.Duration) int64 {
 // attempt sends a request to one provider. call.To stays empty when the
 // provider has no endpoint to send it to.
 func (s *Server) attempt(w http.ResponseWriter, r *http.Request, from provider.Protocol, p provider.Provider, model string, body []byte, call *Call) (int, string) {
+	// A scan may quarantine the key after planning, before this attempt.
+	if !provider.ModelHealthAllows(p, model) {
+		msg := "model is waiting for a successful health check"
+		return writeError(w, from, http.StatusServiceUnavailable, msg), msg
+	}
 	// Normalize for the actual destination, separately on each fallback.
 	// Native ChatGPT accounts accept standalone tool outputs themselves.
 	if from == provider.Responses && (p.Account == nil || p.Account.Agent != "codex") {
@@ -2487,6 +2499,9 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, from provider.P
 	to := s.usable(p, model)
 	if len(to) == 0 {
 		to = p.Speaks()
+	}
+	if pr := provider.ModelHealthProtocol(p, model); pr != "" {
+		to = []provider.Protocol{pr}
 	}
 	if len(to) == 0 {
 		msg := p.Name + " has no endpoint configured"
@@ -3229,9 +3244,10 @@ func (s *Server) markUnfit(providerID, model string, proto provider.Protocol) {
 // thinking (#997).
 func (s *Server) usable(p provider.Provider, model string) []provider.Protocol {
 	apis := p.APIs(model)
+	checked := provider.ModelHealthProtocol(p, model)
 	var out []provider.Protocol
 	for _, proto := range p.Speaks() {
-		if s.fits(p.ID, model, proto) && (apis == nil || slices.Contains(apis, proto)) {
+		if s.fits(p.ID, model, proto) && (apis == nil || slices.Contains(apis, proto)) && (checked == "" || checked == proto) {
 			out = append(out, proto)
 		}
 	}
@@ -3251,6 +3267,9 @@ func (s *Server) usable(p provider.Provider, model string) []provider.Protocol {
 // served on this one, the request is built again for the next endpoint it
 // speaks, and the model is remembered there.
 func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to provider.Protocol, req *Request, model string, in http.Header) (*http.Response, provider.Protocol, error) {
+	// Endpoint rewrites (such as DeepSeek's /beta prefix) must not change
+	// the identity used to look up the protocol that passed the scan.
+	healthProvider := p
 	if req.ThinkOff && req.Effort != "none" && slices.Contains(p.Efforts(model), "none") {
 		// the client turned reasoning off (Effort reads that as low), and
 		// the model can stop thinking: asked for none (#899)
@@ -3409,7 +3428,7 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 			return res, to, nil
 		}
 		s.markUnfit(p.ID, model, to)
-		next := s.usable(p, model)
+		next := s.usable(healthProvider, model)
 		if len(next) == 0 {
 			return res, to, nil
 		}

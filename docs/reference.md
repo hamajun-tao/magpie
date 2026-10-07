@@ -142,6 +142,10 @@ magpie provider deepseek                # one provider in detail
 magpie provider models deepseek         # re-fetch the vendor's list (add ids to choose which to expose)
 magpie provider refresh deepseek        # re-fetch it, and drop picks it no longer has (the TUI: m)
 magpie provider test deepseek           # one tiny request per API, with latency
+magpie provider health on              # custom: scan now, then every 30 minutes; hide after 2 failures
+magpie provider health scan            # custom: recheck every text model and enabled key
+magpie provider health status          # custom: per-key/model results (see CUSTOM.md)
+magpie provider health off             # custom: restore routing without health filtering
 magpie provider key deepseek sk-…       # replace the key
 magpie provider rm deepseek
 magpie models                           # the catalog agents see

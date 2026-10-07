@@ -1,5 +1,26 @@
 # Providers and accounts
 
+## Custom branch: model health checks
+
+The `custom` branch adds opt-in checks for text models on URL/API-key
+providers. [`model_health.go`](../../internal/provider/model_health.go)
+owns configuration, per-key/model state, bounded scans and recovery;
+[`model_health_answer.go`](../../internal/provider/model_health_answer.go)
+requires actual text or reasoning from JSON/SSE replies. The OS-specific
+`model_health_lock_*` files serialize scans and atomic state writes across
+the gateway and CLI. Credentials and destination settings identify records
+through a digest; changing them requires a new successful check.
+
+`Exposed` filters before its picker limit and preserves manual picks.
+Scans refresh lists without dropping picks, re-read repaired destinations,
+and test every enabled key independently. Unknown models stay hidden;
+previously verified models are hidden after the configured consecutive
+failure threshold and restored on the next successful scan. Cancellation
+does not increment failures. An unreadable state file fails closed and
+cannot be overwritten by a scan. Subscription accounts, decision APIs and
+image generation retain their existing checks. See [CUSTOM.md](../../CUSTOM.md)
+for commands, defaults and the update workflow.
+
 The gateway can send a request to three kinds of upstream:
 
 - A **provider** in `providers.json`: an endpoint with one or more API keys.
@@ -31,6 +52,7 @@ keys and accounts per request is in [Gateway routing and fallback](gateway-routi
 | A key's own windows | A sub2api key given a spending limit per 5 hours, day or 7 days answers its `/v1/usage` with `rate_limits` and no `remaining` (`readSub2APIKeyLimits`). With the Balance URL set to it, the key's card shows them as the windows *5 hours*, *1 day*, *7 days*, in USD, beside a balance field the user wrote; *Check balance* and `magpie provider show` give what its fullest window has left (`Balance`). `KeyAllowance` gives routing the same windows: never waited for, read in the background at most once a minute, a failed read keeping the last, and seeded from the card's last reading (`quotas.json`) after a restart.  A key bought as a plan (Kimi Code, GLM Coding Plan and Z.ai, MiniMax Coding Plan, OpenCode Go, Command Code: `planQuotaSourceOf`) gives routing its card's windows the same way (`planKeyWindows`, Zhipu's team quota behind a key with none of its own); the Usage page's read of its card is taken at once (`noteKeyAllowance`), and a key there that turns out pay-as-you-go, with no windows, is asked again only every 30 minutes (`keyNoWindowsAge`). StepFun's Step Plan is read through a sign-in, not the key, and isn't one of them. | [`sub2api_usage.go`](../../internal/provider/sub2api_usage.go), [`key_allowance.go`](../../internal/provider/key_allowance.go) |
 | Last served | `served.json` records when each account, plan or key last answered, shown as `lastServedAt` (#570). | [`served.go`](../../internal/provider/served.go) |
 | Protocol detection | Works out which APIs a base URL speaks when a provider is added. | [`detect.go`](../../internal/provider/detect.go) |
+| Model tests | `Test` asks each configured endpoint; `TestModels` asks each selected model. Basic text probes ask `不要问为什么，只回复ok` through `tinyBody`, also used by protocol detection. The result reports whether the endpoint answered; it does not require the reply to equal `ok` or change model selection. | [`test.go`](../../internal/provider/test.go) |
 
 ## Runtime path
 

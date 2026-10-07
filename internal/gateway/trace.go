@@ -197,6 +197,8 @@ type Weighed struct {
 	// Barred: left out as the user set it not to serve the model, its
 	// own list of models leaving it out (#474)
 	Barred bool `json:"barred,omitempty"`
+	// HealthHeld: no successful basic probe, or quarantined after failures.
+	HealthHeld bool `json:"healthHeld,omitempty"`
 	// Held: left out as the gateway key asking may not use its account or
 	// key (#905)
 	Held bool `json:"held,omitempty"`
