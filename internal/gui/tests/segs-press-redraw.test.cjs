@@ -237,7 +237,11 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         }
         assert.deepEqual(missed, [], "controls the redraw left in place");
         // Theme, Language, Text size, … each warm-up's and check-in's, Proxy, the local network's, Privacy's, OTel's, Sync's, About's
-        assert(done.size >= 49, `only ${done.size} controls: ${[...done].join(", ")}`);
+        // Number units is offered only in Chinese (renderTrayUsage hides
+        // unitsRow elsewhere). All the other controls remain covered.
+        const chineseUnits = lang === "zh" || lang === "zh-TW";
+        assert.equal(done.has("false|true@unitsSegs:0"), chineseUnits, "Chinese number units visibility");
+        assert(done.size >= (chineseUnits ? 49 : 48), `only ${done.size} controls: ${[...done].join(", ")}`);
         assert.deepEqual(posted, [], "a stopped click saved something");
         assert.deepEqual(errors, []);
       });
