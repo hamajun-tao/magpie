@@ -1,8 +1,7 @@
 // Run with Node's test runner and the repository's existing Playwright setup.
-// API fixtures run on a temporary loopback server; no live sign-ins or keys.
+// All API responses are fulfilled in memory; no server, live sign-ins or keys.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
-const http = require("node:http");
 const path = require("node:path");
 const { test } = require("node:test");
 const { chromium, webkit } = require("playwright");
@@ -65,44 +64,19 @@ function fixture() {
   return f;
 }
 
-// Real loopback responses let WebKit cancel a read during a reload without
-// a synthetic route fulfillment racing the old document's security checks.
-async function serve(f, errors) {
-  const server = http.createServer(async (req, res) => {
-    try {
-      let body = "";
-      for await (const chunk of req) body += chunk;
-      await f.route({
-        request: () => ({
-          url: () => new URL(req.url, origin).href,
-          method: () => req.method,
-          postDataJSON: () => JSON.parse(body),
-        }),
-        fulfill: async ({ json, body, contentType, status = 200 }) => {
-          res.writeHead(status, { "Content-Type": json !== undefined ? "application/json" : contentType || "application/octet-stream" });
-          res.end(json !== undefined ? JSON.stringify(json) : body);
-        },
-      });
-    } catch (error) {
-      errors.push(error.message);
-      res.writeHead(500); res.end("Fixture failed");
-    }
-  });
-  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  const origin = `http://127.0.0.1:${server.address().port}`;
-  return { origin, close: () => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }) };
-}
-
 const rows = page => page.locator(".accts [data-account-id]");
 const ids = page => rows(page).evaluateAll(rs => rs.map(r => r.dataset.accountId));
 const settled = page => page.waitForFunction(() => !accountArranging && !accountSaving);
 async function navigate(page, action) {
-  // Let the current quota/lane reads finish before destroying their document.
+  // Stop the old view starting another poll between networkidle and commit.
+  // WebKit reports cancelled lane reads as page errors even when caught.
+  // The new document initializes its own view and polling normally.
+  await page.evaluate(() => { if (typeof view !== "undefined") view = ""; });
   await page.waitForLoadState("networkidle");
   await action();
 }
 async function open(page, id) {
-  await navigate(page, () => page.goto(`/?view=providers&edit=${id}`));
+  await navigate(page, () => page.goto(`http://magpie.test/?view=providers&edit=${id}`));
   await rows(page).first().waitFor();
 }
 async function point(row) {
@@ -134,12 +108,12 @@ async function checkFirst(page, f, id) {
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
   test(`${engine}: account dragging uses the routing order in every mode`, { timeout: 180000 }, async t => {
     const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
-    const f = fixture(), errors = [], server = await serve(f, errors);
-    t.after(async () => { await browser.close(); await server.close(); });
-    const context = await browser.newContext({ baseURL: server.origin, viewport: { width: 1000, height: 850 }, reducedMotion: "reduce", hasTouch: true });
-    const page = await context.newPage();
+    t.after(() => browser.close());
+    const context = await browser.newContext({ viewport: { width: 1000, height: 850 }, reducedMotion: "reduce", hasTouch: true });
+    const page = await context.newPage(), f = fixture(), errors = [];
     page.setDefaultTimeout(5000);
     page.on("pageerror", e => errors.push(e.message));
+    await page.route("**/*", f.route);
     for (const id of ["antigravity", "relay"]) {
       await open(page, id);
       for (const [mode, label] of [["", "Smart"], ["order", "In order"], ["rotate", "In turn"], ["usage", "Least used first"]]) {
@@ -215,7 +189,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     assert(await page.evaluate(() => { const row = document.querySelector(".acc.dragging"); renderProviders(); return row === document.querySelector(".acc.dragging") && accountRenderPending; }));
     await page.mouse.up(); await settled(page); await checkFirst(page, f, "antigravity");
     // Existing Agent sorting still works, with no unused landing styles.
-    await navigate(page, () => page.goto("/?view=agents"));
+    await navigate(page, () => page.goto("http://magpie.test/?view=agents"));
     await page.locator("#agents > .agent").first().waitFor();
     const agents = await page.locator("#agents > .agent").evaluateAll(rs => rs.map(r => ({ id: r.dataset.id, box: r.querySelector(".ag-handle").getBoundingClientRect().toJSON() })));
     const h = agents[0].box, target = agents[1].box;
