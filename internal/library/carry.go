@@ -70,7 +70,7 @@ func Collect() (*Bundle, error) {
 		b.Extra = nil
 	}
 	for _, s := range sorted(l.MCP, func(s *Server) string { return s.Name }) {
-		c := *s
+		c := *carried(s) // magpie's own by name, each computer's own binary
 		c.Agents = orNone(slices.Sorted(slices.Values(s.Agents)))
 		b.MCP = append(b.MCP, &c)
 	}

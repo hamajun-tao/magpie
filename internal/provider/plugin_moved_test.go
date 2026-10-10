@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -170,10 +169,7 @@ func TestAllLoginsMoved(t *testing.T) {
 // installed first when it isn't there, the code the page asks about shown
 // to copy, and the account it signs in to named as the one in use.
 func TestMovedSignInAsBuiltIn(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	home := claudeHome(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Cleanup(plugin.Settle)

@@ -20,6 +20,9 @@ const ruleUsage = `usage:
                                           a rule: a turn that matches it goes to <model>, one of the group's
                                           (or group/<id>, a group in it), first; a model in the group at an
                                           effort of its own is named with it (use=glm/glm-5.3-flash:high)
+  magpie group rule add <group> pause=<model> [time=HH:MM-HH:MM] [days=mon-fri] [agents=a,b…] [at=<n>]
+                                          a pause: while it holds, <model> is left out of the group — sent
+                                          nothing, not even when the others fail or a conversation was on it
   magpie group rule rm <group> <n>        remove rule n
   magpie group rule mv <group> <n> <to>   move rule n to place <to>
   magpie group rule classifier <group> <model>
@@ -28,6 +31,8 @@ const ruleUsage = `usage:
 
   Rules are looked at top first when you send a message (a new turn); the first that
   matches puts its model first, and the group's others stay behind it if it fails.
+  A pause is looked at on every request and leaves its model out while it holds; its
+  conditions are time, days and agents only.
   The agent's tool results within the turn stay with the model the turn began on.
   Every condition given must hold:
   tokens   the request is at least this long (200000, 200k, 1m): estimated from its size, or
@@ -53,6 +58,7 @@ const ruleUsage = `usage:
        magpie group rule add fast use=codex/gpt-5.6-sol:xhigh effort=high
        magpie group rule add opus-anywhere use=deepseek/deepseek-v4-flash compact
        magpie group rule add cheap use=glm/glm-5.3 time=14:00-18:00 days=mon-fri
+       magpie group rule add cheap pause=glm/glm-5.3 time=14:00-18:00 days=mon-fri
        magpie group rule add opus-anywhere use=deepseek/deepseek-v4-flash intent="a quick question" classifier=groq/llama-3.1-8b-instant`
 
 // parseTokens reads 200000, 200k, 1.5m.
@@ -167,6 +173,9 @@ func ruleCmd(args []string) error {
 
 // ruleLine is a rule as magpie group shows it.
 func ruleLine(r provider.Rule) string {
+	if r.Pause {
+		return strings.Join(r.Conditions(), " · ") + muted.Render(" → pause ") + r.Use
+	}
 	return strings.Join(r.Conditions(), " · ") + muted.Render(" → ") + r.Use
 }
 

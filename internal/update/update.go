@@ -10,6 +10,7 @@
 package update
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -125,15 +126,42 @@ func Newer(a, b string) bool {
 			return x.n[i] > y.n[i]
 		}
 	}
+	return comparePre(x.pre, y.pre) > 0
+}
+
+// comparePre orders two pre-releases the way semver does (§11): no
+// pre-release comes after any; otherwise identifier by identifier, numbers
+// as numbers ("beta.10" after "beta.9"), a number before a word, and a
+// shorter list before a longer one it starts.
+func comparePre(a, b string) int {
 	switch {
-	case x.pre == y.pre:
-		return false
-	case x.pre == "":
-		return true
-	case y.pre == "":
-		return false
+	case a == b:
+		return 0
+	case a == "":
+		return 1
+	case b == "":
+		return -1
 	}
-	return x.pre > y.pre
+	x, y := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(x) && i < len(y); i++ {
+		m, errM := strconv.ParseUint(x[i], 10, 64)
+		n, errN := strconv.ParseUint(y[i], 10, 64)
+		switch {
+		case errM == nil && errN == nil:
+			if m != n {
+				return cmp.Compare(m, n)
+			}
+		case errM == nil:
+			return -1
+		case errN == nil:
+			return 1
+		default:
+			if c := strings.Compare(x[i], y[i]); c != 0 {
+				return c
+			}
+		}
+	}
+	return cmp.Compare(len(x), len(y))
 }
 
 type semver struct {
@@ -143,6 +171,8 @@ type semver struct {
 
 func parse(v string) *semver {
 	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	// build metadata ("+sha.5d0c1dc") plays no part in the order
+	v, _, _ = strings.Cut(v, "+")
 	v, pre, _ := strings.Cut(v, "-")
 	parts := strings.Split(v, ".")
 	if len(parts) != 3 {

@@ -53,8 +53,8 @@ func TestPublicURLInConsole(t *testing.T) {
 	if len(g.LANURLs) != 1 || g.LANURLs[0] != want {
 		t.Errorf("LAN addresses: %v, want [%s]", g.LANURLs, want)
 	}
-	if g.Open {
-		t.Error("a gateway shared with a key is not open to anyone")
+	if !g.OnNetwork {
+		t.Error("MAGPIE_ADDR 0.0.0.0 not said to be on the network")
 	}
 	b, err = json.Marshal(g)
 	if err != nil {
@@ -69,9 +69,10 @@ func TestPublicURLInConsole(t *testing.T) {
 	}
 }
 
-// The console warns about a gateway left open to the network: listening
-// beyond loopback with nothing shared.
-func TestGatewayOpenInConsole(t *testing.T) {
+// A gateway MAGPIE_ADDR puts on the network (the Docker image) asks other
+// machines for a gateway key whether or not it is shared, so the Gateway
+// page shows its keys and offers no key-less "this computer" then.
+func TestGatewayOnNetworkInConsole(t *testing.T) {
 	h := t.TempDir()
 	testenv.SetHome(t, h)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(h, ".config"))
@@ -82,13 +83,20 @@ func TestGatewayOpenInConsole(t *testing.T) {
 	if err := settings.Save(settings.Settings{LAN: false}); err != nil {
 		t.Fatal(err)
 	}
-	if g := providersState().Gateway; !g.Open {
-		t.Errorf("open gateway not reported: %+v", g)
+	if g := providersState().Gateway; !g.OnNetwork || !g.LAN {
+		t.Errorf("gateway on the network, not shared, shown without its keys: %+v", g)
 	}
 	if err := settings.Save(settings.Settings{LAN: true}); err != nil {
 		t.Fatal(err)
 	}
-	if g := providersState().Gateway; g.Open {
-		t.Errorf("sharing turns the open warning off: %+v", g)
+	if g := providersState().Gateway; !g.OnNetwork || !g.LAN {
+		t.Errorf("gateway on the network, shared: %+v", g)
+	}
+	t.Setenv("MAGPIE_ADDR", "127.0.0.1:3425")
+	if err := settings.Save(settings.Settings{LAN: false}); err != nil {
+		t.Fatal(err)
+	}
+	if g := providersState().Gateway; g.OnNetwork || g.LAN {
+		t.Errorf("gateway on loopback, not shared: %+v", g)
 	}
 }

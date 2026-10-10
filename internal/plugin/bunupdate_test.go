@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -211,10 +210,7 @@ func TestCheckBunSetsAsideOneThatFailsItsTry(t *testing.T) {
 
 // The real try: the Bun on PATH passes it, as its own version.
 func TestTryBunOnRealBun(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	v := bunReported(bun)
 	if err := tryBun(context.Background(), bun, v); err != nil {
 		t.Fatalf("bun %s: %v", v, err)
@@ -230,10 +226,7 @@ func TestHostFallsBackWhenTheNewBunDies(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the dying bun is a shell script")
 	}
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	bunHome(t, "9.9.9", time.Now().Add(-72*time.Hour))
 	t.Cleanup(Settle)
 	if err := os.MkdirAll(bunDirOf(BunVersion), 0o755); err != nil {

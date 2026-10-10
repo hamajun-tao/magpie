@@ -2,10 +2,11 @@ package main
 
 import (
 	"context"
-	"os"
-	"os/exec"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
-	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,14 +65,43 @@ func TestPluginLoginTakesTheLapseOff(t *testing.T) {
 	}
 }
 
+// An account signed in again is read afresh: the reading kept from the
+// sign-in the vendor refused doesn't answer for the new one, saying its
+// sign-in has expired for up to a minute after it was renewed.
+func TestPluginLoginReadsUsageAfresh(t *testing.T) {
+	var status atomic.Int32
+	status.Store(http.StatusUnauthorized)
+	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(int(status.Load()))
+		fmt.Fprint(w, "Fake Pro")
+	}))
+	defer vendor.Close()
+	t.Setenv("FAKE_USAGE", vendor.URL)
+	ctx := fakeCoHome(t)
+	noBrowser(t)
+	login := func() {
+		t.Helper()
+		piped(t, "2", "2", "team", "good")
+		if out, err := said(t, func() error { return pluginCmd([]string{"plugin", "login", "fakeco"}) }); err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+	}
+	login()
+	if q := provider.LoginUsage(ctx, "fakeco")["team@fake"]; q.Error == "" {
+		t.Fatalf("the vendor's 401 read clean: %+v", q)
+	}
+	status.Store(http.StatusOK)
+	login()
+	if q := provider.LoginUsage(ctx, "fakeco")["team@fake"]; q.Error != "" || q.Plan != "Fake Pro" {
+		t.Fatalf("signed in again, but the usage is the old sign-in's: %+v", q)
+	}
+}
+
 // fakeCoHome is a HOME of the test's own with the plugin host's test
 // plugin (FakeCo) added, as TestAccountsOfAPlugin sets one up.
 func fakeCoHome(t *testing.T) context.Context {
 	t.Helper()
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -92,16 +122,14 @@ func fakeCoHome(t *testing.T) context.Context {
 	return ctx
 }
 
-// noBrowser has the sign-in pages magpie opens go nowhere: an open (macOS)
-// and an xdg-open (Linux) that do nothing come first on PATH.
+// noBrowser has the sign-in pages magpie opens go nowhere. It swaps the
+// opener rather than putting a do-nothing open first on PATH: a script
+// written now is a program macOS checks on its first run, which took 25 to
+// 55 seconds while other test binaries ran, and ate the minute the plugin
+// calls have (#1284).
 func noBrowser(t *testing.T) {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("rundll32 opens the browser on Windows")
-	}
-	dir := t.TempDir()
-	for _, name := range []string{"open", "xdg-open"} {
-		testenv.Program(t, filepath.Join(dir, name), "#!/bin/sh\nexit 0\n")
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	old := openInBrowser
+	openInBrowser = func(string) {}
+	t.Cleanup(func() { openInBrowser = old })
 }

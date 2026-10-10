@@ -51,6 +51,9 @@ func TestCodexDaemonRestartRoute(t *testing.T) {
 	if w := post("dismiss"); w.Code != 200 {
 		t.Fatalf("dismiss: %d %s", w.Code, w.Body)
 	}
+	if w := post("dismiss-app"); w.Code != 200 {
+		t.Fatalf("dismiss-app: %d %s", w.Code, w.Body)
+	}
 	if w := post("nope"); w.Code != 404 {
 		t.Fatalf("unknown action: %d", w.Code)
 	}

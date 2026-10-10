@@ -117,6 +117,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // the library has none now: its empty state's button
         await view.getByRole("button", { name: words[lang].addServer, exact: true }).click();
         const ed = page.locator(".lib-editor");
+        await page.waitForFunction(() => document.querySelector(".dialog")?.getAnimations().every((a) => a.playState !== "running"));
         await ed.locator('input[placeholder="e.g. github"], input[placeholder="例如 github"]').fill("fetch");
         await ed.locator('input[placeholder="npx -y @modelcontextprotocol/server-github"]').fill("uvx mcp-server-fetch");
         await ed.getByRole("button", { name: words[lang].add, exact: true }).click();

@@ -221,6 +221,30 @@ func TestSkillsShPages(t *testing.T) {
 	}
 }
 
+// magpie's own skills come first, marked official, and only where a
+// search names them (ttmouse on X).
+func TestFeaturedSkills(t *testing.T) {
+	sandbox(t)
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	skillsSh(t)
+	popular.Lock()
+	popular.list = nil
+	popular.Unlock()
+	t.Cleanup(func() { popular.Lock(); popular.list = nil; popular.Unlock() })
+
+	list, _ := MarketSkills("")
+	if len(list) != 2 || list[0].ID != "magpie-community/plugins/magpie-quota" || !list[0].Official || !list[0].Featured ||
+		list[0].Description == "" || list[0].Icon != gh("magpie-community") || !offered(list[0].Icon) || list[1].ID != "o/r/pdf" {
+		t.Fatalf("market: %+v", list)
+	}
+	if list, _ := MarketSkills("quota"); len(list) == 0 || list[0].SkillID != "magpie-quota" {
+		t.Fatalf("quota: %+v", list)
+	}
+	if list, _ := MarketSkills("pdf"); slices.ContainsFunc(list, func(m MarketSkill) bool { return m.Featured }) {
+		t.Fatalf("pdf: %+v", list)
+	}
+}
+
 func TestInstallFromRegistry(t *testing.T) {
 	sandbox(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -303,6 +327,16 @@ func TestMagpieImageIsOptIn(t *testing.T) {
 	s := l.server("magpie-image")
 	if s == nil || len(s.Agents) != 0 || !filepath.IsAbs(s.Command) || strings.Join(s.Args, " ") != "mcp image" {
 		t.Fatalf("added as %+v", s)
+	}
+}
+
+// Magpie Image's card doesn't say videos need a Grok subscription: the
+// gateway also makes them with Seedance, another magpie and a provider whose
+// model list marks video models (#1399).
+func TestMagpieImageSaysVideoModels(t *testing.T) {
+	d := selfServer().Description
+	if strings.Contains(d, "Grok subscription") || !strings.Contains(d, "video model set up in Magpie") {
+		t.Fatalf("description %q", d)
 	}
 }
 

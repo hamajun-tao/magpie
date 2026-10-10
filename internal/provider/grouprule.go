@@ -15,6 +15,13 @@ package provider
 // turn is never moved to another model halfway through (the gateway keeps
 // that; see gateway/rules.go). The member a rule names goes first; the
 // group's other members stay behind it for failover.
+//
+// A pause rule (Rule.Pause) sends nothing first: while it holds, the
+// member it names is out of the group altogether — not first, not a
+// failover, not where a conversation was — as a member switched off is
+// (Group.Off), but only at its hours, on its days or for its agents. It is
+// looked at on every request, not as a turn begins: a paused model is
+// paid nothing in its hours, so a turn on it moves when they begin.
 
 import (
 	"fmt"
@@ -54,6 +61,11 @@ type Rule struct {
 	// Time: the turn begins within these hours of the day, local time — a
 	// vendor's peak-price hours sent to another, say.
 	Time *TimeWindow `json:"time,omitempty"`
+	// Pause: rather than sending to Use first, the rule leaves Use out of
+	// the group while it holds (John on Discord: a model paused in a
+	// vendor's peak hours). Only Time and Agents can be its conditions,
+	// what is known of every request before it is read.
+	Pause bool `json:"pause,omitempty"`
 }
 
 // TimeWindow is hours of the day, local time: From until To, "HH:MM" each,
@@ -266,6 +278,8 @@ func cleanRules(rules []Rule, members []string) ([]Rule, error) {
 			return nil, fmt.Errorf("rule %d: an intent is at most %d characters", n, MaxIntent)
 		case len(r.Conditions()) == 0:
 			return nil, fmt.Errorf("rule %d: it needs a condition (tokens, images, effort, agents, intent, compacting or time)", n)
+		case r.Pause && (r.Tokens > 0 || r.Images || r.Effort != "" || r.Intent != "" || r.Compact):
+			return nil, fmt.Errorf("rule %d: a pause holds by hours, days or agents only", n)
 		}
 		if len(r.Agents) == 0 {
 			r.Agents = nil
@@ -292,7 +306,8 @@ type RuleRequest struct {
 	At time.Time
 }
 
-// Matches reports whether the request is one the rule is for.
+// Matches reports whether the request is one the rule sends to its member
+// first; a pause rule sends none (see Pauses).
 func (r Rule) Matches(q RuleRequest) bool {
 	if r.Intent != "" && !strings.EqualFold(r.Intent, q.Intent) {
 		return false
@@ -303,6 +318,9 @@ func (r Rule) Matches(q RuleRequest) bool {
 // MatchesBesidesIntent is Matches but for the rule's intent: whether the
 // classifier's answer is all it waits on.
 func (r Rule) MatchesBesidesIntent(q RuleRequest) bool {
+	if r.Pause {
+		return false
+	}
 	if r.Tokens > 0 && q.Tokens < r.Tokens {
 		return false
 	}
@@ -410,11 +428,11 @@ func ruledEntry(e *Entry, g Group, ms []Member, entries []Entry) {
 	sees := func(x Entry) bool { return x.Images && (x.ImageInput == nil || *x.ImageInput) }
 	for i, r := range g.Rules {
 		x, ok := of(r.Use)
-		if !ok {
+		if !ok || r.Pause {
 			continue
 		}
 		if r.Images && r.Tokens == 0 && r.Effort == "" && len(r.Agents) == 0 && r.Intent == "" && !r.Compact && r.Time == nil && sees(x) && !e.Images &&
-			!slices.ContainsFunc(g.Rules[:i], func(b Rule) bool { y, ok := of(b.Use); return !ok || !sees(y) }) {
+			!slices.ContainsFunc(g.Rules[:i], func(b Rule) bool { y, ok := of(b.Use); return !b.Pause && (!ok || !sees(y)) }) {
 			e.Images, e.ImageInput = true, x.ImageInput
 		}
 		if r.Tokens == 0 || r.Images || r.Effort != "" || len(r.Agents) > 0 || r.Intent != "" || r.Compact || r.Time != nil || x.Context <= e.Context {
@@ -433,6 +451,9 @@ func ruledEntry(e *Entry, g Group, ms []Member, entries []Entry) {
 		}
 		for _, before := range g.Rules[:i] {
 			// one not ready now leaves what it matches to the group's order
+			if before.Pause {
+				continue
+			}
 			if y, ok := of(before.Use); !ok {
 				fits = 0
 			} else if y.Context < fits {
@@ -443,4 +464,66 @@ func ruledEntry(e *Entry, g Group, ms []Member, entries []Entry) {
 			e.Context = fits
 		}
 	}
+}
+
+// Pauses reports whether a pause rule holds for a request from agent at
+// the time given.
+func (r Rule) Pauses(agent string, at time.Time) bool {
+	if !r.Pause || r.Time == nil && len(r.Agents) == 0 {
+		return false
+	}
+	if r.Time != nil && !r.Time.Holds(at) {
+		return false
+	}
+	return len(r.Agents) == 0 || slices.Contains(r.Agents, strings.ToLower(agent))
+}
+
+// Paused is a model a pause rule left out of a request's group.
+type Paused struct {
+	Member string   `json:"member"`          // "provider/model[:effort]"
+	Group  string   `json:"group,omitempty"` // the group in the group whose rule it is; "" the group's own
+	Rule   int      `json:"rule"`            // the rule, from 1
+	Use    string   `json:"use"`             // the member the rule names: the model, or a group in the group
+	When   []string `json:"when"`
+}
+
+// PausedOut leaves out of ms the models a pause rule holds for now: the
+// group's own, or those of a group in it on the way to them. A rule naming
+// a group in the group pauses every model of it.
+func PausedOut(g Group, ms []Member, agent string, at time.Time) (kept []Member, paused []Paused) {
+	if !slices.ContainsFunc(g.Rules, func(r Rule) bool { return r.Pause }) &&
+		!slices.ContainsFunc(ms, func(m Member) bool {
+			return slices.ContainsFunc(m.Via, func(v Group) bool { return slices.ContainsFunc(v.Rules, func(r Rule) bool { return r.Pause }) })
+		}) {
+		return ms, nil
+	}
+	for _, m := range ms {
+		var hit *Paused
+		for d := 0; d <= len(m.Via) && hit == nil; d++ {
+			by, in := g, ""
+			if d > 0 {
+				by, in = m.Via[d-1], m.Via[d-1].ID
+			}
+			for i, r := range by.Rules {
+				if d < len(m.Path) && pathNames(m.Path[d:], r.Use) && r.Pauses(agent, at) {
+					hit = &Paused{Member: WithMemberEffort(m.Provider.ID+"/"+m.Model, m.Effort), Group: in, Rule: i + 1, Use: r.Use, When: r.Conditions()}
+					break
+				}
+			}
+		}
+		if hit != nil {
+			paused = append(paused, *hit)
+			continue
+		}
+		kept = append(kept, m)
+	}
+	return kept, paused
+}
+
+// pathNames reports whether a member's way down from a group (its id
+// there first, its model last) is what that group's rule names: the
+// member itself, or the model when a group in the group, ahead of it, has
+// it too (#625).
+func pathNames(path []string, id string) bool {
+	return path[0] == id || !strings.HasPrefix(id, GroupPrefix) && len(path) > 1 && path[len(path)-1] == id
 }

@@ -67,8 +67,15 @@ function fixture() {
 const rows = page => page.locator(".accts [data-account-id]");
 const ids = page => rows(page).evaluateAll(rs => rs.map(r => r.dataset.accountId));
 const settled = page => page.waitForFunction(() => !accountArranging && !accountSaving);
+async function navigate(page, action) {
+  // Let routed quota/lane reads finish before destroying their document.
+  // WebKit can report an access-control error when a fulfillment overlaps
+  // navigation, even though the app handles a cancelled background read.
+  await page.waitForLoadState("networkidle");
+  await action();
+}
 async function open(page, id) {
-  await page.goto(`http://magpie.test/?view=providers&edit=${id}`);
+  await navigate(page, () => page.goto(`http://magpie.test/?view=providers&edit=${id}`));
   await rows(page).first().waitFor();
 }
 async function point(row) {
@@ -98,7 +105,7 @@ async function checkFirst(page, f, id) {
 }
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
-  test(`${engine}: account dragging uses the routing order in every mode`, { timeout: 90000 }, async t => {
+  test(`${engine}: account dragging uses the routing order in every mode`, { timeout: 180000 }, async t => {
     const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
     t.after(() => browser.close());
     const context = await browser.newContext({ viewport: { width: 1000, height: 850 }, reducedMotion: "reduce", hasTouch: true });
@@ -123,7 +130,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(await ids(page), [before[1], before[0], ...before.slice(2)]);
         assert.equal(f.posted.filter(p => p.action === "/api/provider/arrange").length, count + 1);
         await checkFirst(page, f, id);
-        await page.reload(); await rows(page).first().waitFor();
+        await navigate(page, () => page.reload()); await rows(page).first().waitFor();
         await checkFirst(page, f, id);
         const wanted = (await ids(page))[1];
         await rows(page).nth(1).getByRole("button", { name: "Make first", exact: true }).click();
@@ -181,7 +188,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     assert(await page.evaluate(() => { const row = document.querySelector(".acc.dragging"); renderProviders(); return row === document.querySelector(".acc.dragging") && accountRenderPending; }));
     await page.mouse.up(); await settled(page); await checkFirst(page, f, "antigravity");
     // Existing Agent sorting still works, with no unused landing styles.
-    await page.goto("http://magpie.test/?view=agents");
+    await navigate(page, () => page.goto("http://magpie.test/?view=agents"));
     await page.locator("#agents > .agent").first().waitFor();
     const agents = await page.locator("#agents > .agent").evaluateAll(rs => rs.map(r => ({ id: r.dataset.id, box: r.querySelector(".ag-handle").getBoundingClientRect().toJSON() })));
     const h = agents[0].box, target = agents[1].box;

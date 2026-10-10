@@ -133,8 +133,8 @@ func TestCrushModelsCarryMaxTokens(t *testing.T) {
 // magpie hands an output limit; one whose window isn't known keeps its
 // output. ZCode and WorkBuddy cap it at zcodeMaxOutput besides, Crush falls
 // back to 16384 without a known output, OpenCode is handed no limit without
-// a window, and AtomCode, told a 128000 window when the model's isn't known,
-// is cut to that.
+// a window, and AtomCode and Snow CLI, each told a window of its own when
+// the model's isn't known, are cut to that.
 func TestMaxTokensWithinContextWindow(t *testing.T) {
 	home := syncHome(t)
 	check := func(limit string, want int) {
@@ -156,6 +156,10 @@ func TestMaxTokensWithinContextWindow(t *testing.T) {
 			t.Fatal(err)
 		}
 		atomcodeCfg, _ := os.ReadFile(atomcode)
+		snowOut, err := snowProfileFor(nil, gatewayV1(), "k", "relay/glm-4.6")
+		if err != nil {
+			t.Fatal(err)
+		}
 		rules, wb := filepath.Join(t.TempDir(), "provider_config.json"), filepath.Join(t.TempDir(), "models.json")
 		if err := zcodeRules(rules, true, true); err != nil {
 			t.Fatal(err)
@@ -170,6 +174,10 @@ func TestMaxTokensWithinContextWindow(t *testing.T) {
 		if !strings.Contains(limit, "context") {
 			told = strconv.Itoa(min(want, atomcodeContext))
 		}
+		snowTold := n
+		if !strings.Contains(limit, "context") {
+			snowTold = strconv.Itoa(min(want, snowContext))
+		}
 		wants := map[string][2]string{
 			"pi":          {string(pi), `"maxTokens":` + n},
 			"cline":       {string(cline), `"maxTokens":` + n},
@@ -183,6 +191,7 @@ func TestMaxTokensWithinContextWindow(t *testing.T) {
 			"zcode rules": {string(zcRules), `"max":` + capped},
 			"workbuddy":   {string(wbModels), `"maxOutputTokens": ` + capped},
 			"atomcode":    {string(atomcodeCfg), "max_tokens = " + told},
+			"snow":        {string(snowOut), `"maxTokens": ` + snowTold},
 		}
 		if strings.Contains(limit, "context") {
 			wants["opencode"] = [2]string{string(opencode), `"output":` + n}

@@ -107,6 +107,34 @@ class DeploymentTests(unittest.TestCase):
         self.services.assert_called_with('start')
         self.assertTrue(self.report['rolled_back'])
 
+    def test_repeated_stop_failure_before_switch_still_recovers_original(self):
+        self.services.side_effect = [RuntimeError('stop timed out'), RuntimeError('stop timed out again'), None]
+        with self.assertRaisesRegex(RuntimeError, 'stop timed out'):
+            update.deploy(self.new, self.report)
+        self.assertEqual((self.root / 'current').resolve(), self.old)
+        self.services.assert_called_with('start')
+        self.accept.assert_called_once_with('old')
+        self.assertTrue(self.report['rolled_back'])
+
+    def test_rollback_stop_error_when_already_inactive_restores_old(self):
+        self.services.side_effect = [None, None, subprocess.TimeoutExpired('systemctl', 60), None]
+        self.accept.side_effect = [RuntimeError('new version failed acceptance'), None]
+        with patch.object(update.subprocess, 'run', return_value=Mock(stdout='inactive\n')):
+            with self.assertRaisesRegex(RuntimeError, 'failed acceptance'):
+                update.deploy(self.new, self.report)
+        self.assertEqual((self.root / 'current').resolve(), self.old)
+        self.assertTrue(self.report['rolled_back'])
+
+    def test_rollback_does_not_restore_config_while_service_is_active(self):
+        self.services.side_effect = [None, None, subprocess.TimeoutExpired('systemctl', 60)]
+        self.accept.side_effect = RuntimeError('new version failed acceptance')
+        with patch.object(update.subprocess, 'run', return_value=Mock(stdout='active\n')):
+            with patch.object(update, 'restore_state') as restore:
+                with self.assertRaisesRegex(RuntimeError, 'rollback.*still running'):
+                    update.deploy(self.new, self.report)
+                restore.assert_not_called()
+        self.assertFalse(self.report.get('rolled_back', False))
+
     def test_changed_key_triggers_rollback_even_when_http_passes(self):
         before = update.protected_hashes()
 
@@ -177,17 +205,17 @@ class BuildEnvironmentTests(unittest.TestCase):
             runner.environment = {'PATH': os.defpath, 'HOME': directory}
             runner.directory = root
             executable = root / 'generated'
-            actual_run = subprocess.run
+            actual_popen = subprocess.Popen
 
             def without_user_switch(command, **kwargs):
                 # Test the real child process while keeping the test's existing identity.
                 self.assertEqual(command[:4], ['runuser', '-u', update.USER, '--'])
-                return actual_run(command[4:], **kwargs)
+                return actual_popen(command[4:], **kwargs)
 
             original = os.umask(0o077)
             try:
                 with (root / 'build.log').open('w') as runner.log:
-                    with patch.object(update.subprocess, 'run', side_effect=without_user_switch):
+                    with patch.object(update.subprocess, 'Popen', side_effect=without_user_switch):
                         runner.build_user([sys.executable, '-c',
                             'import os,sys; fd=os.open(sys.argv[1],os.O_CREAT|os.O_WRONLY,0o755); os.close(fd)',
                             executable])
@@ -195,6 +223,55 @@ class BuildEnvironmentTests(unittest.TestCase):
                 self.assertEqual((root / 'build.log').stat().st_mode & 0o777, 0o600)
             finally:
                 os.umask(original)
+
+    def timeout_tree(self, detached):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = update.Update.__new__(update.Update)
+            runner.environment = {'PATH': os.defpath, 'HOME': directory}
+            runner.directory = root
+            marker = root / 'escaped-child'
+            actual_popen = subprocess.Popen
+            def without_user_switch(command, **kwargs):
+                return actual_popen(command[4:], **kwargs)
+            with (root / 'build.log').open('w') as runner.log:
+                with patch.object(update.subprocess, 'Popen', side_effect=without_user_switch):
+                    with self.assertRaisesRegex(RuntimeError, 'check timed out'):
+                        runner.build_user([sys.executable, '-c',
+                            'import os,time,pathlib,sys\n'
+                            'child=os.fork()\n'
+                            'if child == 0:\n'
+                            ' if sys.argv[2] == "detached": os.setsid()\n'
+                            ' grandchild=os.fork()\n'
+                            ' time.sleep(1)\n'
+                            ' if grandchild == 0: pathlib.Path(sys.argv[1]).touch()\n'
+                            ' else: time.sleep(5)\n'
+                            'else: time.sleep(5)\n',
+                            marker, 'detached' if detached else 'same-group'], timeout=0.5)
+            import time
+            time.sleep(1)
+            self.assertFalse(marker.exists(), 'the timed-out check left a child running')
+
+    def test_timeout_stops_the_child_process_tree(self):
+        self.timeout_tree(False)
+
+    def test_timeout_stops_detached_browser_descendants(self):
+        self.timeout_tree(True)
+
+    def test_shared_assets_check_all_gui_tests_with_a_full_suite_timeout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            tests = source / 'internal/gui/tests'
+            tests.mkdir(parents=True)
+            for name in ('gui-ja', 'gui-de', 'account-arrange', 'click-scroll'):
+                (tests / (name + '.test.cjs')).touch()
+            runner = update.Update.__new__(update.Update)
+            runner.build_user = Mock(return_value='internal/gui/assets/app.css')
+            runner.check = Mock()
+            runner.check_gui(source, {'commit': 'old'})
+            args = runner.check.call_args.args[1]
+            self.assertEqual(set(args[3:]), {p.relative_to(source).as_posix() for p in tests.iterdir()})
+            self.assertEqual(runner.check.call_args.kwargs['timeout'], 14400)
 
 
 if __name__ == '__main__':

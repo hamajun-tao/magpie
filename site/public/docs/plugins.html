@@ -46,6 +46,8 @@
     <a href="/docs/start">Get started</a>
     <a href="/docs/intent">Intent routing</a>
     <a href="/docs/plugins">Plugins</a>
+    <a class="toc-only" href="/docs/remote">Remote magpie</a>
+    <a class="toc-only" href="/docs/docker">Docker</a>
     <a href="/docs/import">Add to magpie</a>
     <a href="/docs/integrate">Integrate</a>
     <a href="https://github.com/yetone/magpie-releases/releases">Releases</a>
@@ -209,9 +211,9 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
       <li><b>Proxy.</b> Every fetch a plugin makes for a provider or an account goes through the proxy the user set for that provider or account. Otherwise it goes through magpie’s own proxy, unless the setting is <em>direct</em>. Loopback addresses never go through a proxy. A fetch that passes its own <code>proxy</code> option is left alone.</li>
       <li><b>Updates.</b>
         <ul>
-          <li>The community’s packages (<code>@magpie-community/*</code>) update by themselves a little after magpie starts, then every six hours.</li>
+          <li>The community’s packages (<code>@magpie-community/*</code>) update by themselves a little after magpie starts, then every hour.</li>
           <li>Any other package with a newer version shows a dot on <span class="ui">Plugins</span>, and the user updates it with a click or <code>magpie plugin update</code>.</li>
-          <li>A spec pinned to a version (<code>name@1.2.3</code>) stays on it.</li>
+          <li>A spec pinned to a version (<code>name@1.2.3</code>) stays on it until the user updates it: <span class="ui">Update to …</span>, <span class="ui">Update all</span> and <code>magpie plugin update</code> install the newest version and unpin it.</li>
         </ul></li>
     </ul>
     <p>What magpie keeps, in its config folder (<code>~/.config/magpie</code>, or <code>$XDG_CONFIG_HOME/magpie</code>):</p>
@@ -540,6 +542,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
       <li>Agents name a plugin’s model as <code>&lt;id&gt;/&lt;model&gt;</code>, where the id is the plugin’s <code>auth.provider</code>.</li>
       <li>When the id is taken in magpie, by a built-in subscription, a preset (<code>google</code>, <code>openai</code>, <code>anthropic</code>, …) or <code>magpie</code> itself, the plugin’s provider is named <code>&lt;id&gt;-plugin</code>. Pick an id that is only yours.</li>
       <li>The community’s plugins for magpie’s deprecated built-in subscriptions are the exception. They use the built-in’s id (<code>cursor</code>, <code>zed</code>, …) and take it over once the user moves onto the plugin, so agents keep working unchanged.</li>
+      <li>When two installed plugins sign in to the same id, such as a published plugin and your own copy of it, one of them serves it: the one picked for it, otherwise the one added last. Both stay in <span class="ui">Plugins → Installed</span>, and each row says which one serves the provider. <span class="ui">Use for …</span> on the other row, or <code>magpie plugin use &lt;name&gt; &lt;id&gt;</code>, makes the pick.</li>
     </ul>
 
     <h2 id="test"><a class="anchor" href="#test">Testing</a></h2>
@@ -581,7 +584,7 @@ m plugin logout acme</pre>
   <span class="s">"summary"</span>: { <span class="s">"en"</span>: <span class="s">"Your Acme Coding Plan."</span>, <span class="s">"zh"</span>: <span class="s">"使用你的 Acme Coding Plan。"</span> } }</pre>
         </div>
         A middleware’s entry has <code>"kind": "middleware"</code> and no <code>providers</code>; it is listed under <span class="ui">Gateway middleware</span>. <code>MAGPIE_PLUGIN_MARKET=&lt;url&gt;</code> points magpie at another list, which is useful to check yours, and <code>off</code> keeps to the built-in copy.</li>
-      <li><b>A GitHub topic.</b> A repository tagged <code>magpie-plugin</code> on GitHub is shown under <span class="ui">Plugins → Discover → Unofficial, on GitHub</span>, the most starred first, marked as reviewed by no one. Keep <code>package.json</code> at the repository’s root. Published to npm with <code>repository</code> naming the repository, it is installed from npm; otherwise from the repository as it stands, so the file it loads must be committed: one whose <code>dist</code> is built only to publish is left out. Forks, archived repositories and magpie-community’s own are left out too. magpie asks GitHub at most every six hours.</li>
+      <li><b>A GitHub topic.</b> A repository tagged <code>magpie-plugin</code> on GitHub is shown under <span class="ui">Plugins → Discover → Unofficial, on GitHub</span>, the most starred first, marked as reviewed by no one. Keep <code>package.json</code> at the repository’s root. Published to npm with <code>repository</code> naming the repository, it is installed from npm; otherwise from the repository as it stands, so the file it loads must be committed: one whose <code>dist</code> is built only to publish is left out. Forks, archived repositories and magpie-community’s own are left out too. magpie asks GitHub at most every ten minutes, so a repository shows within minutes of being tagged. Its card shows the icon <code>"magpie": { "icon": "…" }</code> in its <code>package.json</code> gives, else a puzzle piece.</li>
       <li><b>The community packages.</b> To contribute one to <a href="https://github.com/magpie-community/plugins">magpie-community/plugins</a>:
         <ul>
           <li>Put it under <code>packages/&lt;name&gt;</code>, named <code>@magpie-community/opencode-&lt;name&gt;-auth</code> (a provider) or <code>@magpie-community/middleware-&lt;name&gt;</code> (middleware), with no runtime dependencies unless one is really needed.</li>
@@ -708,6 +711,8 @@ magpie plugin options model-map '{"mapping": {"fast": "deepseek/deepseek-chat"}}
     <a href="/">Home</a>
     <a href="/docs/intent">Intent routing</a>
     <a href="/docs/plugins">Plugins</a>
+    <a href="/docs/remote">Remote magpie</a>
+    <a href="/docs/docker">Docker</a>
     <a href="/docs/import">Add to magpie</a>
     <a href="/docs/integrate">Integrate</a>
     <a href="https://github.com/yetone/magpie">GitHub</a>

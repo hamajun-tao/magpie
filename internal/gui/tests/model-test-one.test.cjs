@@ -85,6 +85,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await page.goto("http://magpie.test/?view=providers");
       await page.locator(".row.provider", { hasText: "Relay" }).click();
       await page.locator(".editor .mchips .mchip").first().waitFor();
+      await page.waitForFunction(() => document.querySelector(".dialog")?.getAnimations().every((a) => a.playState !== "running"));
       const chip = (id) => page.locator(".editor .mchips .mchip", { hasText: id });
       const menu = page.locator(".pop.row-menu");
       // which models, the editor's form aside (see provider-typed)

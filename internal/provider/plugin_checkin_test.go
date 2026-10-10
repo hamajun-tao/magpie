@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -12,16 +11,14 @@ import (
 
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/settings"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 // pluginCheckinSandbox is the fake plugin with its own check-in, signed in
 // with each key; it says the file each press is written to.
 func pluginCheckinSandbox(t *testing.T, keys ...string) string {
 	t.Helper()
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	home := claudeHome(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	presses := filepath.Join(home, "presses")
@@ -175,10 +172,7 @@ func TestPluginCheckinRunsAsTheBuiltinsDo(t *testing.T) {
 // through its fetch, so an account isn't checked in twice; and its switch
 // follows the vendor's, which it took over, until set on its own.
 func TestPluginCheckinTakesOverTheVendors(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	claudeHome(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Setenv("FAKE_ID", "qoder")

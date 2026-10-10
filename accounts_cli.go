@@ -24,7 +24,7 @@ import (
 // — the subscriptions magpie remembers, how much of each one's allowance is
 // used, and switching the agent between them.
 func accountsCmd(args []string) error {
-	const usage = "usage: magpie accounts [claude|codex|grok|copilot|gemini|antigravity|zed|factory|mimo|<plugin>] [--json] | magpie accounts add <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> | magpie accounts add copilot [--host <name>.ghe.com] | magpie accounts refresh [--json] | magpie accounts checkin [--json] | magpie accounts switch|forget <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> <email> | magpie accounts project <gemini|antigravity> <email> <gcp-project-id>"
+	const usage = "usage: magpie accounts [claude|codex|grok|copilot|gemini|antigravity|zed|factory|mimo|<plugin>] [--json] | magpie accounts add <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> | magpie accounts add copilot [--host <name>.ghe.com] | magpie accounts import <codex|claude|antigravity|factory> <file>... [--yes] | magpie accounts refresh [--json] | magpie accounts checkin [--json] | magpie accounts switch|forget <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> <email> | magpie accounts switch|forget copilot <login>[@<name>.ghe.com] [--host <name>.ghe.com] | magpie accounts project <gemini|antigravity> <email> <gcp-project-id>"
 	agentID := func(s string) (string, error) {
 		switch strings.ToLower(s) {
 		case "claude", "cc":
@@ -41,12 +41,14 @@ func accountsCmd(args []string) error {
 			return "factory", nil
 		case "mimo", "mimo-app", "xiaomi-mimo":
 			return provider.MiMoID, nil
+		case "copilot":
+			return "copilot", nil
 		}
 		// a plugin's subscription, by its provider's id or name, as a built-in's
 		if pp, err := pluginProvider(context.Background(), s); err == nil {
 			return provider.PluginID(pp.ID), nil
 		}
-		return "", fmt.Errorf("%q: only Claude Code, Codex, Gemini CLI, Antigravity, Zed, Factory, Xiaomi MiMo and plugins' accounts can be added and switched\n%s", s, usage)
+		return "", fmt.Errorf("%q: only Claude Code, Codex, Copilot, Gemini CLI, Antigravity, Zed, Factory, Xiaomi MiMo and plugins' accounts can be added and switched\n%s", s, usage)
 	}
 	if len(args) > 1 && args[1] == "project" {
 		if len(args) != 5 {
@@ -65,6 +67,9 @@ func accountsCmd(args []string) error {
 			fmt.Println(green.Render("✓"), args[3], "now uses Google Cloud project", args[4])
 		}
 		return nil
+	}
+	if len(args) > 1 && args[1] == "import" {
+		return importAccounts(args[2:])
 	}
 	if len(args) > 1 && args[1] == "refresh" {
 		return refreshAccounts(len(args) > 2 && args[2] == "--json")
@@ -104,12 +109,37 @@ func accountsCmd(args []string) error {
 		return addAccount(id)
 	}
 	if len(args) > 1 && (args[1] == "switch" || args[1] == "forget") {
+		// a Copilot account's host, for a login on more than one (#1220)
+		host, hasHost := "", false
+		for i := 2; i < len(args); i++ {
+			if v, ok := strings.CutPrefix(args[i], "--host="); ok {
+				host, hasHost = v, true
+				args = slices.Delete(slices.Clone(args), i, i+1)
+				break
+			}
+			if args[i] == "--host" && i+1 < len(args) {
+				host, hasHost = args[i+1], true
+				args = slices.Delete(slices.Clone(args), i, i+2)
+				break
+			}
+		}
 		if len(args) != 4 {
 			return fmt.Errorf("%s", usage)
 		}
 		id, err := agentID(args[2])
 		if err != nil {
 			return err
+		}
+		if hasHost {
+			if id != "copilot" {
+				return fmt.Errorf("--host names a Copilot account's host\n%s", usage)
+			}
+			h, err := provider.CopilotHost(host)
+			if err != nil {
+				return err
+			}
+			login, _, _ := strings.Cut(args[3], "@")
+			args[3] = provider.CopilotAccountName(login, h)
 		}
 		if args[3], err = accountNamed(id, args[3]); err != nil {
 			return err
@@ -126,7 +156,7 @@ func accountsCmd(args []string) error {
 		if err := provider.SwitchLogin(id, args[3]); err != nil {
 			return err
 		}
-		if _, plug := provider.PluginOf(id); plug || id == "gemini" || id == "antigravity" {
+		if _, plug := provider.PluginOf(id); plug || id == "gemini" || id == "antigravity" || id == "copilot" {
 			fmt.Println(green.Render("✓"), "magpie now uses", args[3], "for", id)
 			return nil
 		}
@@ -135,6 +165,9 @@ func accountsCmd(args []string) error {
 			if was := provider.CodexDaemonStale(); was != "" {
 				fmt.Println(" ", "Codex's background service is still signed in as", was+"; restart it to use", args[3]+":", provider.CodexDaemonRestart)
 				fmt.Println(" ", muted.Render("running Codex sessions will be interrupted"))
+			}
+			if was := provider.CodexAppStale(); was != "" {
+				fmt.Println(" ", "The Codex app is still signed in as", was+", and shows its limits; quit it and open it again to use", args[3])
 			}
 		}
 		return nil
@@ -405,7 +438,147 @@ func addAccount(agentID string) error {
 	return fmt.Errorf("sign-in canceled")
 }
 
-func openInBrowser(url string) {
+// importUsage is how `magpie accounts import` is run.
+const importUsage = "usage: magpie accounts import <codex|claude|antigravity|factory> <file>... [--yes]"
+
+// importAccounts: `magpie accounts import <agent> <file>... [--yes]` brings
+// in accounts from other tools' files, as the window's "Import accounts from
+// a file…" does (#1453): Codex's auth.json, Cockpit Tools', CLIProxyAPI's
+// and Sub2API's exports for ChatGPT; Claude Code's .credentials.json and
+// CLIProxyAPI's for Claude; Antigravity Cockpit's, Antigravity Manager's
+// and CLIProxyAPI's for Antigravity; Factory API keys. The files are only
+// read. What importing does to the tool the file came from is said first,
+// and nothing is imported until that is agreed to (--yes agrees).
+func importAccounts(args []string) error {
+	yes := false
+	var rest []string
+	for _, a := range args {
+		switch a {
+		case "--yes", "-y":
+			yes = true
+		default:
+			rest = append(rest, a)
+		}
+	}
+	if len(rest) < 2 {
+		return fmt.Errorf("%s", importUsage)
+	}
+	var id string
+	switch strings.ToLower(rest[0]) {
+	case "codex", "chatgpt":
+		id = "codex"
+	case "claude", "cc":
+		id = "claude"
+	case "antigravity", "ag":
+		id = "antigravity"
+	case "factory", "droid":
+		id = "factory"
+		if provider.Moved(id) {
+			return fmt.Errorf("Factory runs on its plugin now: add the key with magpie accounts add factory")
+		}
+	default:
+		return fmt.Errorf("%q: accounts can be imported for codex, claude, antigravity and factory\n%s", rest[0], importUsage)
+	}
+	paths := rest[1:]
+	files := make([]string, len(paths))
+	for i, p := range paths {
+		// a file that can't be read stops the import: what it holds isn't
+		// known, so it isn't taken for a file with nothing in it
+		st, err := os.Stat(p)
+		if err != nil {
+			return err
+		}
+		if st.Size() > 4<<20 {
+			return fmt.Errorf("%s is too big to be an export", p)
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		files[i] = string(b)
+	}
+	var say []string
+	switch id {
+	case "codex":
+		say = []string{"Each account's sign-in is refreshed with ChatGPT before it is added, as signing in does.",
+			"That spends the file's sign-in: the tool it came from (Codex CLI on another computer, Cockpit Tools, CLIProxyAPI) is signed out of that account and has to sign in again. From then on the account is magpie's.",
+			"The files are only read, never changed. An account magpie holds already is left as it is."}
+	case "claude":
+		say = []string{provider.ClaudeRisk,
+			"Each account is kept as the file has it. Claude Code renews its sign-in the first time it uses it, and the file's copy then stops working: the tool it came from has to sign in again.",
+			"The files are only read, never changed."}
+	case "antigravity":
+		say = []string{provider.AntigravityRisk, "Each account's sign-in is refreshed with Google before it is added."}
+	case "factory":
+		say = []string{"Each key is asked whose Factory account it is before it is added."}
+	}
+	for _, s := range say {
+		fmt.Println(bold.Render("!"), s)
+	}
+	if !yes {
+		fmt.Print("Import? [y/N] ")
+		var answer string
+		fmt.Scanln(&answer)
+		if a := strings.ToLower(strings.TrimSpace(answer)); a != "y" && a != "yes" {
+			return fmt.Errorf("import canceled")
+		}
+	}
+	ctx, stop := interruptContext()
+	defer stop()
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	var res []provider.ImportedAccount
+	var err error
+	switch id {
+	case "codex", "claude":
+		res, err = provider.ImportLogins(ctx, id, files)
+	case "antigravity":
+		res, err = provider.ImportGoogleAccounts(ctx, id, files)
+	case "factory":
+		res, err = provider.ImportFactoryKeys(ctx, files)
+	}
+	if err != nil {
+		if len(paths) == 1 {
+			return fmt.Errorf("%s: %w", paths[0], err)
+		}
+		return err
+	}
+	took := 0
+	for _, r := range res {
+		who := r.User
+		if r.File > 0 && r.File <= len(paths) {
+			who = paths[r.File-1]
+		}
+		switch r.Status {
+		case "added":
+			took++
+			plan := ""
+			if r.Plan != "" {
+				plan = " · " + r.Plan
+			}
+			fmt.Println(green.Render("✓"), "added", who+plan)
+		case "updated":
+			took++
+			fmt.Println(green.Render("✓"), who, muted.Render("· in magpie already, now with this sign-in"))
+		case "exists":
+			took++
+			fmt.Println(muted.Render("="), who, muted.Render("· in magpie already with this sign-in, left as it is"))
+		default:
+			fmt.Println(bold.Render("✗"), who+":", r.Error)
+		}
+	}
+	if took == 0 {
+		return fmt.Errorf("nothing imported")
+	}
+	fmt.Println(faint.Render("  see them: magpie accounts " + id))
+	return nil
+}
+
+// openInBrowser opens url in the user's browser. It is a variable so the
+// tests can have it go nowhere without starting a program (noBrowser).
+var openInBrowser = openURLInBrowser
+
+func openURLInBrowser(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
@@ -543,6 +716,14 @@ func checkinWorkBuddy(asJSON bool) error {
 // the agent's accounts has it.
 func accountNamed(agent, user string) (string, error) {
 	user = strings.TrimSpace(user)
+	if agent == "copilot" {
+		// "mona@github.com" is github.com's mona, named "mona"
+		if login, host, ok := strings.Cut(user, "@"); ok {
+			if h, err := provider.CopilotHost(host); err == nil {
+				user = provider.CopilotAccountName(login, h)
+			}
+		}
+	}
 	ls := provider.Logins(agent)
 	var names, same []string
 	for _, l := range ls {
@@ -552,11 +733,17 @@ func accountNamed(agent, user string) (string, error) {
 		names = append(names, l.User)
 		if email, _, _ := strings.Cut(l.User, " · "); strings.EqualFold(strings.TrimSpace(email), user) {
 			same = append(same, l.User)
+		} else if login, _, _ := strings.Cut(l.User, "@"); agent == "copilot" && strings.EqualFold(login, user) {
+			// a Copilot login alone names its one account on an
+			// enterprise's host (#1220)
+			same = append(same, l.User)
 		}
 	}
 	switch {
 	case len(same) == 1:
 		return same[0], nil
+	case len(same) > 1 && agent == "copilot":
+		return "", fmt.Errorf("copilot has %d accounts of %s: %q — name one in full (<login>@<name>.ghe.com) or add --host <name>.ghe.com", len(same), user, same)
 	case len(same) > 1:
 		return "", fmt.Errorf("%s has %d accounts of %s: %q — name one in full", agent, len(same), user, same)
 	case len(names) == 0:

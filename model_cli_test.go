@@ -605,6 +605,34 @@ func TestModelLimitCmd(t *testing.T) {
 	}
 }
 
+// #1438: `magpie model output` says the reply limit agents are told and
+// /v1/models gives, within the model's window, and what it was kept from;
+// the user's own limit stays as they set it, for a wider window to take.
+func TestModelOutputCmdWithinTheWindow(t *testing.T) {
+	groupsHome(t)
+	catalog.Changed = nil
+	if err := modelCmd([]string{"context", "a/m", "200k"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := modelCmd([]string{"output", "a/m", "500k"}); err != nil {
+		t.Fatal(err)
+	}
+	out := saidArgs(t, "output", "a/m")
+	if !strings.HasPrefix(strings.TrimSpace(out), "200k") || !strings.Contains(out, "500k, kept within its 200k window") {
+		t.Errorf("output a/m: %q; want 200k, kept from 500k", out)
+	}
+	if n := settings.Load().ModelOutputs["a/m"]; n != 500_000 {
+		t.Errorf("the user's limit became %d", n)
+	}
+	// within the window: as it was, with no line about it
+	if err := modelCmd([]string{"output", "a/m", "64k"}); err != nil {
+		t.Fatal(err)
+	}
+	if out := saidArgs(t, "output", "a/m"); !strings.HasPrefix(strings.TrimSpace(out), "64k") || strings.Contains(out, "kept within") {
+		t.Errorf("output a/m: %q; want 64k as it is", out)
+	}
+}
+
 // A provider kept unlisted, or switched off, still serves its models and
 // still takes the window a user gives one, so the query has to answer about
 // the very ids the setter takes: "is not a model this provider serves" on

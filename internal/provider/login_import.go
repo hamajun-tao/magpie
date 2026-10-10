@@ -4,9 +4,13 @@ package provider
 // rather than signed in again: CLIProxyAPI keeps each as
 // {type: "codex", id_token, access_token, refresh_token, account_id, email, …}
 // or {type: "claude", access_token, refresh_token, email, …}, Codex CLI as
-// auth.json ({tokens: {…}}) and Claude Code as .credentials.json
-// ({claudeAiOauth: {…}}); a bare refresh token a line is taken too. They
-// all sign in with the agents' own OAuth clients, the ones magpie uses.
+// auth.json ({tokens: {…}}), Claude Code as .credentials.json
+// ({claudeAiOauth: {…}}), and Sub2API as {accounts: [{platform, type:
+// "oauth", credentials: {…}}]}. Cockpit Tools (jlcodes99/cockpit-tools)
+// exports its Codex accounts in these shapes: its own (CLIProxyAPI's),
+// Codex's auth.json, CPA and Sub2API. A bare refresh token a line is taken
+// too. They all sign in with the agents' own OAuth clients, the ones
+// magpie uses.
 //
 // A ChatGPT one is checked the way a sign-in is finished: its refresh token
 // traded for new tokens and the account asked for. That rotates the token,
@@ -30,6 +34,7 @@ type loginImport struct {
 	email, idToken, accessToken, refreshToken, accountID string
 	scopes                                               []string
 	err                                                  string
+	file                                                 int // a file that held no account (ImportedAccount.File)
 }
 
 // claudeImportScopes are what Claude Code's sign-in asks for, taken when a
@@ -56,6 +61,12 @@ func parseLoginImport(agent, data string) ([]loginImport, error) {
 					walk(it)
 				}
 			case map[string]any:
+				// a Sub2API account: its vendor in platform, its sign-in
+				// in credentials
+				if c, ok := x["credentials"].(map[string]any); ok && jsonStr(x, "platform") != "" {
+					out = append(out, sub2apiEntry(agent, x, c))
+					return
+				}
 				if as, ok := x["accounts"].([]any); ok && jsonStr(x, "refresh_token", "refreshToken") == "" {
 					walk(as)
 					return
@@ -122,6 +133,36 @@ func loginEntry(agent string, x map[string]any) loginImport {
 		e.err = "not a " + name + " sign-in"
 	case e.refreshToken == "" && jsonStr(x, "OPENAI_API_KEY", "api_key", "apiKey") != "":
 		e.err = "an API key, not a sign-in; add it as a key instead"
+	case e.refreshToken == "" && (e.accessToken != "" || jsonStr(x, "personal_access_token") != ""):
+		e.err = accessOnly
+	}
+	return e
+}
+
+// accessOnly: an account with an access token and no refresh token (a
+// ChatGPT web session, an access-token export) works for days at most and
+// can't be renewed, so it isn't kept as an account that would just stop.
+const accessOnly = "only an access token, no refresh_token: it would stop working within days and can't be renewed; sign in to this account instead"
+
+// sub2apiEntry reads one account of a Sub2API export.
+func sub2apiEntry(agent string, x, c map[string]any) loginImport {
+	name := map[string]string{"codex": "Codex", "claude": "Claude"}[agent]
+	platform := jsonStr(x, "platform")
+	ours := map[string]string{"openai": "codex", "anthropic": "claude", "claude": "claude"}[strings.ToLower(platform)] == agent
+	e := loginImport{email: jsonStr(c, "email"), idToken: jsonStr(c, "id_token"), accessToken: jsonStr(c, "access_token"),
+		refreshToken: jsonStr(c, "refresh_token"), accountID: jsonStr(c, "chatgpt_account_id", "account_id")}
+	if n := jsonStr(x, "name"); e.email == "" && strings.Contains(n, "@") {
+		e.email = n // Cockpit Tools names each account by its email
+	}
+	switch typ := strings.ToLower(jsonStr(x, "type")); {
+	case !ours:
+		e.err = fmt.Sprintf("a %s account, not %s's", platform, name)
+	case typ == "apikey":
+		e.err = "an API key, not a sign-in; add it as a key instead"
+	case typ != "oauth":
+		e.err = "not a " + name + " sign-in"
+	case e.refreshToken == "" && e.accessToken != "":
+		e.err = accessOnly
 	}
 	return e
 }
@@ -134,12 +175,14 @@ func ImportLogins(ctx context.Context, agent string, files []string) ([]Imported
 		return nil, fmt.Errorf("accounts can't be imported for %s", agent)
 	}
 	var all []loginImport
-	for _, f := range files {
+	for i, f := range files {
 		es, err := parseLoginImport(agent, f)
 		if err != nil {
 			if len(files) == 1 {
 				return nil, err
 			}
+			// one file of several that holds none: said, not passed over
+			all = append(all, loginImport{file: i + 1, err: err.Error()})
 			continue
 		}
 		all = append(all, es...)
@@ -175,12 +218,12 @@ func ImportLogins(ctx context.Context, agent string, files []string) ([]Imported
 	sem := make(chan struct{}, 4)
 	for i, e := range all {
 		name := e.email
-		if name == "" {
+		if name == "" && e.file == 0 {
 			name = fmt.Sprintf("#%d", i+1)
 		}
 		switch {
 		case e.err != "":
-			out[i] = ImportedAccount{User: name, Status: "failed", Error: e.err}
+			out[i] = ImportedAccount{User: name, File: e.file, Status: "failed", Error: e.err}
 			continue
 		case e.refreshToken == "":
 			out[i] = ImportedAccount{User: name, Status: "failed", Error: "no refresh_token in it"}

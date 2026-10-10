@@ -304,6 +304,11 @@ func dshYAML(indent, k string, v any) []string {
 	key := indent + dshKey(k) + ":"
 	switch x := v.(type) {
 	case dshJS:
+		// a variable whole bare, as dsh-mcp-client's README has it; the
+		// rest quoted, which dsh's YAML reads as the same expression
+		if dshEnvRef.MatchString(string(x)) {
+			return []string{key + " !!js " + string(x)}
+		}
 		return []string{key + " !!js " + dshScalar(string(x))}
 	case string:
 		return []string{key + " " + dshScalar(x)}

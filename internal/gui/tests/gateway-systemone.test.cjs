@@ -73,7 +73,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         });
 
         await page.goto("http://magpie.test/?view=gateway&lang=curl");
-        await page.locator("#gwModels .row.model").first().waitFor();
+        await page.locator("#gwModels .row.model:not(.gw-sk-row)").first().waitFor();
         assert(await page.getByText(w.five).first().isVisible(), "the head counts five APIs");
         const connect = page.locator("#connect");
         const modelCode = () => connect.locator(".val").nth(2).locator("code").textContent();

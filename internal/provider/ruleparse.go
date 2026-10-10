@@ -1,8 +1,9 @@
 package provider
 
 // A rule as it is typed: use=<model> tokens=200k images effort=high
-// agents=a,b intent="…" compact time=09:00-18:00 days=mon-fri — by magpie
-// group rule and the TUI's routing page.
+// agents=a,b intent="…" compact time=09:00-18:00 days=mon-fri, or
+// pause=<model> time=… days=… agents=… — by magpie group rule and the
+// TUI's routing page.
 
 import (
 	"fmt"
@@ -94,6 +95,12 @@ func ParseRule(g Group, words []string) (r Rule, at int, classifier string, err 
 				return r, 0, "", err
 			}
 			r.Use = id
+		case "pause", "skip":
+			id, err := GroupMember(g, v)
+			if err != nil {
+				return r, 0, "", err
+			}
+			r.Use, r.Pause = id, true
 		case "tokens", "context", "longer":
 			n, err := ParseTokens(v)
 			if err != nil {
@@ -159,11 +166,17 @@ func ParseRule(g Group, words []string) (r Rule, at int, classifier string, err 
 			}
 			at = n
 		default:
-			return r, 0, "", fmt.Errorf(UnknownRuleWord+"%q (use, tokens, images, effort, agents, intent, compact, time, days, classifier, at)", w)
+			return r, 0, "", fmt.Errorf(UnknownRuleWord+"%q (use, pause, tokens, images, effort, agents, intent, compact, time, days, classifier, at)", w)
 		}
 	}
 	if r.Use == "" {
-		return r, 0, "", fmt.Errorf("use=<model> is missing: one of %s", strings.Join(g.Members, ", "))
+		return r, 0, "", fmt.Errorf("use=<model> (or pause=<model>) is missing: one of %s", strings.Join(g.Members, ", "))
+	}
+	if r.Pause && (r.Tokens > 0 || r.Images || r.Effort != "" || r.Intent != "" || r.Compact) {
+		return r, 0, "", fmt.Errorf("pause=<model> holds by time=, days= or agents= only")
+	}
+	if r.Pause && r.Time == nil && len(r.Agents) == 0 {
+		return r, 0, "", fmt.Errorf("pause=<model> needs time=, days= or agents=: when the model is left out")
 	}
 	if r.Intent != "" && classifier == "" && g.Classifier == "" {
 		return r, 0, "", fmt.Errorf("a rule with an intent needs the group's classifier, the model that tells which intent a message is: add classifier=<model>, best a small fast one")
@@ -234,6 +247,9 @@ func RuleWords(line string) []string {
 // Line is the rule as ParseRule reads it back.
 func (r Rule) Line() string {
 	out := []string{"use=" + r.Use}
+	if r.Pause {
+		out[0] = "pause=" + r.Use
+	}
 	if r.Tokens > 0 {
 		out = append(out, fmt.Sprintf("tokens=%d", r.Tokens))
 	}

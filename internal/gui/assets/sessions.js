@@ -27,6 +27,24 @@
   let loading = 0;
   let fitObserver = null;
   let focus = null;           // { agent, id, until }: a session to bring into sight once drawn
+  let recordingBusy = false;
+  // An open folder draws its latest SM_PAGE sessions and a "Show N more"
+  // that adds the next page where it is (ChildhoodAndy on X: with thousands
+  // of sessions, switching to the page or to another agent, a keystroke in
+  // the filter and opening a session each drew every row again, 17,000
+  // elements for 1,000 sessions, and scrolling stuttered). drawnIn is how
+  // many of each folder's sessions are drawn, by cwd; it starts again at a
+  // page when the agent or the filter changes.
+  const SM_PAGE = 100;
+  const drawnIn = new Map();
+
+  // A session seen only through magpie's gateway has no folder magpie knows
+  // (its agent's files are on another computer, in a container or under
+  // another config folder): such sessions are grouped by that, not under
+  // "No folder" with the agent's own (lc on Discord).
+  const GW = "\x00gateway";
+  const groupOf = (s) => s.cwd || (s.gateway ? GW : "");
+  const groupName = (k) => k === GW ? t("Seen through the gateway") : k ? baseName(k) : t("No folder");
 
   const TRASH = "M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4";
   const TERM = "M3 4.5 6 7.5 3 10.5M7.5 11.5h5.5";
@@ -68,7 +86,7 @@
       detail = s.id;
       openedFor = agent;
       opened.clear();
-      opened.add(s.cwd || "");
+      opened.add(groupOf(s));
       focus = scrollOnPurpose(e) ? { agent, id: s.id, until: performance.now() + 5000 } : null;
     }
     show("sessions");
@@ -134,6 +152,64 @@
     load(name);
   }
 
+  // The gateway conversations setting (#1355): a card above the list, shown
+  // only where it applies — when this agent has sessions seen through the
+  // gateway, in gateway mode, or once recording is on or text is kept. A
+  // switch that says what it keeps and where, and, while there is kept
+  // text, a delete that says what it deletes and asks first in magpie's own
+  // dialog (lee on Discord: a bare checkbox and a lone trash icon under the
+  // tabs read as stray controls).
+  const recordingApplies = () => typeof data?.recording === "boolean"
+    && (data.recording || data.recorded || (typeof gatewayMode !== "undefined" && gatewayMode) || !!data.sessions?.some((s) => s.gateway));
+
+  function recordingCard() {
+    const on = data.recording;
+    const card = el("div", "list row sm-record" + (on ? " on" : ""));
+    const sw = el("button", "lib-switch sm-record-switch" + (on ? " on" : ""));
+    sw.type = "button";
+    sw.setAttribute("role", "switch");
+    sw.setAttribute("aria-checked", String(on));
+    sw.disabled = recordingBusy;
+    sw.append(el("i"));
+    const words = el("div", "sm-record-words");
+    const name = el("span", "sm-record-name", t("Record gateway conversations"));
+    name.id = "smRecordName";
+    sw.setAttribute("aria-labelledby", name.id);
+    words.append(name, el("span", "sm-record-sub", t(on
+      ? "On: what agents send through the gateway, and the replies, are kept on this computer only, for up to 7 days (256 MiB), to read under each gateway session"
+      : "Off: gateway sessions show only what they used. Turned on, their text is kept on this computer only, for up to 7 days (256 MiB)")));
+    sw.onclick = async (e) => {
+      e.stopPropagation();
+      if (sw.disabled) return;
+      if (!on && !await confirmAction(t("Record gateway conversations"), t("Prompts, replies and tool results may contain private code and files. Store them on this server for up to 7 days (256 MiB total)? Recognized secrets are masked, but this is not a privacy guarantee."), t("Enable"))) return;
+      recordingBusy = true;
+      sw.disabled = true;
+      try {
+        const result = await api("sessions/recording", { on: !on });
+        data.recording = result.recording;
+      } catch (err) { status(err.message, "err"); }
+      finally { recordingBusy = false; draw(); }
+    };
+    card.append(sw, words);
+    if (data.recorded) {
+      const clear = el("button", "text sm-record-clear");
+      clear.type = "button";
+      clear.disabled = recordingBusy;
+      clear.append(svg(TRASH, 13, 1.4), el("span", "", t("Delete saved conversations…")));
+      clear.onclick = async (e) => {
+        e.stopPropagation();
+        if (!await confirmAction(t("Stop recording and clear saved conversations"), t("Delete all locally recorded gateway conversation content? Usage totals and native session files are kept."), t("Delete"))) return;
+        recordingBusy = true;
+        clear.disabled = true;
+        try { await api("sessions/recording", { clear: true }); talks.clear(); await load(); }
+        catch (err) { status(err.message, "err"); }
+        finally { recordingBusy = false; draw(); }
+      };
+      card.append(clear);
+    }
+    return card;
+  }
+
   function head() {
     const h = el("div", "usage-head sm-head");
     const wrap = el("div", "sm-switch");
@@ -176,8 +252,8 @@
     q.placeholder = t("Filter sessions");
     q.value = query;
     q.hidden = trashOn;
-    q.oninput = () => { query = q.value; redrawList(); };
-    q.onkeydown = (e) => { if (e.key === "Escape" && q.value) { e.stopPropagation(); q.value = ""; query = ""; redrawList(); } };
+    q.oninput = () => { query = q.value; drawnIn.clear(); redrawList(); };
+    q.onkeydown = (e) => { if (e.key === "Escape" && q.value) { e.stopPropagation(); q.value = ""; query = ""; drawnIn.clear(); redrawList(); } };
     const tr = el("button", "text sm-trash-btn" + (trashOn ? " on" : ""));
     tr.type = "button";
     tr.setAttribute("aria-pressed", String(trashOn));
@@ -198,6 +274,7 @@
       return box;
     }
     if (trashOn) { box.append(...trash()); return box; }
+    if (recordingApplies()) box.append(recordingCard());
     if (!data.agents.length) {
       const e = el("div", "empty-state");
       e.append(el("b", "", t("No sessions yet")), el("span", "", t("Claude Code's, Codex's, Hermes's, OpenCode's and Pi's sessions on this computer show up here, by the folder they ran in.")));
@@ -205,9 +282,12 @@
       return box;
     }
     const a = current();
-    if (a && (data.sessions.some((s) => s.read_only) || !a.deletable)) {
-      const canResume = data.sessions.some((s) => s.resume);
-      const key = data.sessions.some((s) => s.read_only)
+    // what can't be deleted says so; the gateway's sessions, which can,
+    // say why they can't be resumed and what Delete removes of them
+    const locked = data.sessions.filter((s) => !s.deletable);
+    if (a && (locked.length || !a.deletable)) {
+      const canResume = locked.some((s) => s.resume);
+      const key = locked.some((s) => s.read_only)
         ? canResume
           ? "Some {agent} sessions are read only and cannot be deleted."
           : "These {agent} sessions are read only; magpie can list them, but cannot resume or delete them."
@@ -215,6 +295,11 @@
           ? "magpie can list {agent}'s sessions and resume them, but not delete them: they aren't kept as files of their own."
           : "magpie can list {agent}'s sessions, but cannot resume or delete them.";
       box.append(el("p", "usage-note sm-note", t(key, { agent: a.name })));
+    }
+    if (a && data.sessions.some((s) => s.gateway)) {
+      box.append(el("p", "usage-note sm-note sm-gw-note", t(data.sessions.every((s) => s.gateway)
+        ? "These {agent} sessions were seen only through magpie's gateway: {agent}'s own files of them aren't on this computer (it may run on another one, in a container or with another config folder), so they can't be resumed here. Delete takes one off this list and moves any conversation magpie recorded of it to its trash; Usage keeps what it spent."
+        : "Sessions under \"Seen through the gateway\" have no {agent} files on this computer, so they can't be resumed here. Delete takes one off this list and moves any conversation magpie recorded of it to its trash; Usage keeps what it spent.", { agent: a.name })));
     }
     const prov = providerBar();
     if (prov) box.append(prov);
@@ -338,7 +423,7 @@
     const bar = el("div", "row-head sm-bar");
     const a = current();
     if (!a?.deletable) { bar.hidden = true; return bar; }
-    const list = shown().filter((s) => !s.read_only);
+    const list = shown().filter((s) => s.deletable);
     const all = el("input", "sm-check");
     all.type = "checkbox";
     all.checked = list.length > 0 && list.every((s) => picked.has(s.id));
@@ -363,10 +448,10 @@
   function wholeFolder(ids) {
     const all = data?.sessions || [];
     const set = new Set(ids);
-    const cwds = new Set(all.filter((s) => set.has(s.id)).map((s) => s.cwd || ""));
+    const cwds = new Set(all.filter((s) => set.has(s.id)).map((s) => groupOf(s)));
     if (cwds.size !== 1) return undefined;
     const [cwd] = cwds;
-    return all.filter((s) => (s.cwd || "") === cwd).every((s) => set.has(s.id)) ? cwd : undefined;
+    return all.filter((s) => groupOf(s) === cwd).every((s) => set.has(s.id)) ? cwd : undefined;
   }
 
   function redrawList() {
@@ -379,11 +464,12 @@
     if (openedFor !== data.agent) {
       openedFor = data.agent;
       opened.clear();
-      if (list[0]) opened.add(list[0].cwd || "");
+      drawnIn.clear();
+      if (list[0]) opened.add(groupOf(list[0]));
     }
     const groups = new Map();
     for (const s of list) {
-      const k = s.cwd || "";
+      const k = groupOf(s);
       if (!groups.has(k)) groups.set(k, []);
       groups.get(k).push(s);
     }
@@ -398,7 +484,7 @@
       const open = !!q || opened.has(cwd);
       const g = el("div", "list sm-group");
       const r = el("div", "row sm-folder");
-      const writable = items.filter((s) => !s.read_only);
+      const writable = items.filter((s) => s.deletable);
       // the folder's box picks every session of it shown, folded or not,
       // for the bar's Delete; the bar still counts sessions (#527)
       if (current()?.deletable && writable.length) {
@@ -411,7 +497,7 @@
         };
         c.sync();
         folderBoxes.set(cwd, c);
-        c.setAttribute("aria-label", t("Select every session in {folder}", { folder: cwd ? baseName(cwd) : t("No folder") }));
+        c.setAttribute("aria-label", t("Select every session in {folder}", { folder: groupName(cwd) }));
         c.onclick = (e) => e.stopPropagation();
         c.onchange = () => {
           for (const s of writable) c.checked ? picked.add(s.id) : picked.delete(s.id);
@@ -422,19 +508,48 @@
       const fold = el("button", "fold");
       fold.type = "button";
       fold.setAttribute("aria-expanded", String(open));
-      fold.append(svg(CHEV_R, 10, 1.6), el("span", "name", cwd ? baseName(cwd) : t("No folder")));
+      fold.append(svg(CHEV_R, 10, 1.6), el("span", "name", groupName(cwd)));
       fold.onclick = () => {
         if (opened.has(cwd)) opened.delete(cwd); else opened.add(cwd);
         redrawList();
       };
-      r.append(fold, el("span", "sub sm-path", cwd), el("span", "grow"), el("span", "note", t(items.length === 1 ? "{n} session" : "{n} sessions", { n: items.length })));
+      const path = cwd === GW ? "" : cwd;
+      r.append(fold, el("span", "sub sm-path", path), el("span", "grow"), el("span", "note", t(items.length === 1 ? "{n} session" : "{n} sessions", { n: items.length })));
 
-      r.title = cwd;
+      r.title = path;
       g.append(r);
-      if (open) for (const s of items) g.append(item(s));
+      if (open) {
+        // a page, or as many as were drawn before, and down to the session
+        // opened to its details (from the Usage page's list, #752)
+        const at = detail ? items.findIndex((s) => s.id === detail) : -1;
+        const n = Math.min(items.length, Math.max(drawnIn.get(cwd) || SM_PAGE, at + 1));
+        for (const s of items.slice(0, n)) g.append(item(s));
+        if (n < items.length) g.append(moreRow(cwd, items, n));
+      }
       tree.append(g);
     }
     toFocus();
+  }
+
+  // moreRow adds the folder's next page of sessions above itself, leaving
+  // the rows drawn as they are, so what the reader looks at doesn't move
+  function moreRow(cwd, items, n) {
+    drawnIn.set(cwd, n);
+    const b = el("button", "text sess-page-more sm-more");
+    b.type = "button";
+    b.dataset.unrolls = ""; // it goes down with the rows it opens
+    const label = () => t("Show {n} more", { n: Math.min(SM_PAGE, items.length - n) });
+    b.textContent = label();
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const next = Math.min(items.length, n + SM_PAGE);
+      b.before(...items.slice(n, next).map(item));
+      n = next;
+      drawnIn.set(cwd, n);
+      if (n >= items.length) b.remove();
+      else b.textContent = label();
+    };
+    return b;
   }
 
   function item(s) {
@@ -442,18 +557,22 @@
     const wrap = el("div", "sess-item sm-item" + (detail === s.id ? " open" : ""));
     const r = el("div", "row sess sm-sess");
     r.dataset.id = s.id;
-    if (a?.deletable && !s.read_only) {
+    if (a?.deletable && s.deletable) {
       const c = el("input", "sm-check");
       c.type = "checkbox";
       c.checked = picked.has(s.id);
       c.setAttribute("aria-label", t("Select"));
       c.onclick = (e) => e.stopPropagation();
-      c.onchange = () => { c.checked ? picked.add(s.id) : picked.delete(s.id); const bar = page.querySelector(".sm-bar"); if (bar) bar.replaceWith(selectBar()); folderBoxes.get(s.cwd || "")?.sync(); };
+      c.onchange = () => { c.checked ? picked.add(s.id) : picked.delete(s.id); const bar = page.querySelector(".sm-bar"); if (bar) bar.replaceWith(selectBar()); folderBoxes.get(groupOf(s))?.sync(); };
       r.append(c);
     }
     const who = el("div", "who");
     who.append(el("div", "name", s.title || t("(no prompt)")));
-    const sub = el("div", "sub", [ago(s.last), sessModelsText(s), s.messages ? t(s.messages === 1 ? "{n} message" : "{n} messages", { n: s.messages }) : "", fmtBytes(s.size), s.id.slice(0, 8)].filter(Boolean).join(" · "));
+    const sub = el("div", "sub", [ago(s.last), sessModelsText(s), s.messages ? t(s.messages === 1 ? "{n} message" : "{n} messages", { n: s.messages }) : "",
+      // a gateway session's size is the conversation magpie recorded of it,
+      // and none is said when it recorded none; its title is its id already
+      s.gateway ? (s.size ? t("{size} recorded", { size: fmtBytes(s.size) }) : "") : fmtBytes(s.size),
+      s.title === s.id ? "" : s.id.slice(0, 8)].filter(Boolean).join(" · "));
     if (s.via?.length) sub.title = s.via.map(viaText).join("\n");
     if (s.wsl) sub.prepend(wslBadge(s), " ");
     if (otherProvider(s)) {
@@ -490,7 +609,7 @@
       }
     }
     if (s.carry?.length) r.append(carryPick(s));
-    if (a?.deletable && !s.read_only) {
+    if (a?.deletable && s.deletable) {
       const del = el("button", "copy sm-del");
       del.type = "button";
       del.title = t("Delete");
@@ -499,10 +618,17 @@
       del.onclick = (e) => { e.stopPropagation(); askDelete([s.id]); };
       r.append(del);
     }
+    // only the session opened and the one closed are drawn again
     r.onclick = () => {
       if (window.getSelection()?.toString()) return;
+      const was = detail;
       detail = detail === s.id ? "" : s.id;
-      redrawList();
+      if (was && was !== s.id) {
+        const old = page.querySelector(`.row.sm-sess[data-id="${CSS.escape(was)}"]`)?.closest(".sm-item");
+        const prev = data.sessions.find((x) => x.id === was);
+        if (old && prev) old.replaceWith(item(prev));
+      }
+      wrap.replaceWith(item(s));
     };
     wrap.append(r);
     if (detail === s.id) wrap.append(details(s));
@@ -527,6 +653,7 @@
     if (s.path) line(t("File"), s.path + (s.files > 1 ? " " + t("+{n} more", { n: s.files - 1 }) : ""));
     if (s.transcript) {
       const box = el("div", "sess-talk");
+      box.dataset.talk = s.agent + "/" + s.id;
       const b = el("button", "text sess-talk-btn");
       b.type = "button";
       const show = () => {
@@ -542,11 +669,44 @@
         if (talkOpen.has(k)) talkOpen.delete(k); else talkOpen.add(k);
         show();
       };
-      line(t("Conversation"), b);
+      line(t("Conversation"), b, exportBtn(s));
       d.append(box);
       show();
     }
     return d;
+  }
+
+  // exportBtn saves a session's whole conversation as Markdown (#1276),
+  // read from the agent's own file by the server: in magpie web the browser
+  // downloads it, in the app it goes to Downloads and the status says where.
+  function exportBtn(s) {
+    const b = el("button", "text sess-export", t("Export Markdown"));
+    b.type = "button";
+    b.title = t("Save the whole conversation as a Markdown file");
+    const q = "agent=" + encodeURIComponent(s.agent) + "&id=" + encodeURIComponent(s.id);
+    b.onclick = async (e) => {
+      e.stopPropagation();
+      if (web) {
+        const a = el("a");
+        a.href = "/api/sessions/markdown?" + q;
+        a.download = "";
+        a.click();
+        return;
+      }
+      if (b.disabled) return;
+      b.disabled = true;
+      b.classList.add("busy");
+      try {
+        const r = await api("sessions/export?" + q, {});
+        status(t("Saved to {path}", { path: r.path }), "ok");
+      } catch (err) {
+        status(err.message, "err");
+      } finally {
+        b.disabled = false;
+        b.classList.remove("busy");
+      }
+    };
+    return b;
   }
 
   // agentOf is an agent as the page names it: of those with sessions, else
@@ -591,20 +751,29 @@
     const got = talks.get(k);
     if (!got) {
       box.replaceChildren(el("p", "cx-none", t("Reading…")));
-      talks.set(k, { busy: true });
+      const pending = { busy: true };
+      talks.set(k, pending);
+      const finish = (value) => {
+        // A refresh or clear invalidates older responses, even for the same ID.
+        if (talks.get(k) !== pending) return;
+        talks.set(k, value);
+        if (!talkOpen.has(k)) return;
+        for (const currentBox of page.querySelectorAll(".sess-talk")) {
+          if (currentBox.dataset.talk === k) drawTalk(currentBox, s);
+        }
+      };
       api("sessions/transcript?agent=" + encodeURIComponent(s.agent) + "&id=" + encodeURIComponent(s.id))
-        .then((tr) => talks.set(k, { tr }), (err) => talks.set(k, { err: err.message }))
-        .then(() => { if (box.isConnected && talkOpen.has(k)) drawTalk(box, s); });
+        .then((tr) => finish({ tr }), (err) => finish({ err: err.message }));
       return;
     }
-    if (got.busy) return;
+    if (got.busy) { box.replaceChildren(el("p", "cx-none", t("Reading…"))); return; }
     if (got.err) { box.replaceChildren(el("p", "cx-none", got.err)); talks.delete(k); return; }
     const parts = got.tr?.parts || [];
     const out = [];
-    if (!parts.length) out.push(el("p", "cx-none", t("Nothing was said here")));
+    if (!parts.length) out.push(el("p", "cx-none", t(got.tr?.source === "gateway" ? "No saved gateway content for this session" : "Nothing was said here")));
     for (const p of parts) out.push(ledSaid(p));
     if (got.tr?.cut) out.push(el("p", "cx-none", t("There was more than is shown here")));
-    out.push(el("p", "cx-src", t("Read from the agent's session file; magpie keeps no copy")));
+    out.push(el("p", "cx-src", t(got.tr?.source === "gateway" ? "Recorded gateway traffic only; earlier, expired or uncaptured content may be missing" : "Read from the agent's session file; magpie keeps no copy")));
     box.replaceChildren(...out);
   }
 
@@ -619,19 +788,21 @@
     const h = el("div", "ehead");
     const whole = folder !== undefined && list.length > 1;
     // picked folders each whole: how many folders, as well as sessions
-    const cwds = new Set(list.map((s) => s.cwd || ""));
-    const folders = !whole && cwds.size > 1 && (data?.sessions || []).every((s) => !cwds.has(s.cwd || "") || ids.includes(s.id)) ? cwds.size : 0;
+    const cwds = new Set(list.map((s) => groupOf(s)));
+    const folders = !whole && cwds.size > 1 && (data?.sessions || []).every((s) => !cwds.has(groupOf(s)) || ids.includes(s.id)) ? cwds.size : 0;
     h.append(icon(a.icon), el("b", "", list.length === 1 ? t("Delete this session?")
-      : whole ? t("Delete all {n} sessions in {folder}?", { n: list.length, folder: folder ? baseName(folder) : t("No folder") })
+      : whole ? t("Delete all {n} sessions in {folder}?", { n: list.length, folder: groupName(folder) })
       : folders ? t("Delete all {n} sessions in {k} folders?", { n: list.length, k: folders })
       : t("Delete {n} sessions?", { n: list.length })));
     ed.append(h);
-    if (folder) ed.append(el("p", "sub sm-ask-path", folder));
+    if (folder && folder !== GW) ed.append(el("p", "sub sm-ask-path", folder));
     const names = el("ul", "sm-ask-list");
     for (const s of list.slice(0, 5)) names.append(el("li", "", s.title || s.id));
     if (list.length > 5) names.append(el("li", "more", t("+{n} more", { n: list.length - 5 })));
     ed.append(names);
-    ed.append(el("p", "lib-confirm", t("Their files are moved to magpie's trash ({dir}), not erased: Trash puts them back. A session written to in the last minute is left alone, as {agent} may still be running it.", { dir: data.trashDir, agent: a.name })));
+    // a gateway session has no files of its agent's here: say what goes
+    if (list.some((s) => !s.gateway)) ed.append(el("p", "lib-confirm", t("Their files are moved to magpie's trash ({dir}), not erased: Trash puts them back. A session written to in the last minute is left alone, as {agent} may still be running it.", { dir: data.trashDir, agent: a.name })));
+    if (list.some((s) => s.gateway)) ed.append(el("p", "lib-confirm sm-gw-confirm", t("A session seen only through the gateway leaves this list, and any conversation magpie recorded of it is moved to magpie's trash ({dir}): Trash puts it back. {agent}'s own files elsewhere are not touched, and Usage keeps what it spent. One with a request in the last minute is left alone.", { dir: data.trashDir, agent: a.name })));
     const bar = el("div", "bar");
     const go = el("button", "text primary danger-fill", t("Delete"));
     go.type = "button";
@@ -743,8 +914,9 @@
         r.append(icon(x.icon));
         const who = el("div", "who");
         who.append(el("div", "name", x.title || x.id));
-        who.append(el("div", "sub", [x.name, x.cwd ? baseName(x.cwd) : "", t("deleted {when}", { when: ago(x.deleted) }), fmtBytes(x.size)].filter(Boolean).join(" · ")));
-        who.title = x.items.map((i) => i.from).join("\n");
+        who.append(el("div", "sub", [x.name, x.gateway ? t("Seen through the gateway") : x.cwd ? baseName(x.cwd) : "", t("deleted {when}", { when: ago(x.deleted) }),
+          x.gateway ? (x.size ? t("{size} recorded", { size: fmtBytes(x.size) }) : "") : fmtBytes(x.size)].filter(Boolean).join(" · ")));
+        who.title = (x.items || []).map((i) => i.from).join("\n");
         r.append(who);
         const b = el("button", "sess-resume sm-restore");
         b.type = "button";
@@ -775,6 +947,8 @@
       out.push(l);
     }
     out.push(el("p", "usage-note", t("Deleted sessions are kept in {dir} until you erase them here; magpie never erases them by itself.", { dir: data.trashDir })));
+    // the recording's promise holds in the trash too
+    if (items.some((x) => x.gateway)) out.push(el("p", "usage-note sm-gw-trash-note", t("Conversations magpie recorded through the gateway still expire after 7 days here, and Delete saved conversations… erases them too.")));
     return out;
   }
 })();

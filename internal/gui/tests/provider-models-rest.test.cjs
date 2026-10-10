@@ -76,13 +76,20 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await more.scrollIntoViewIfNeeded();
       const last = chips.locator(".mchip", { hasText: /^zen\/model-79$/ });
       const before = await last.evaluate((e) => e.getBoundingClientRect().top);
+      const scroll = await chips.evaluate((e) => e.scrollTop);
+      const editorScroll = await editor.locator(".ebody").evaluate((e) => e.scrollTop);
       await more.click();
       await page.waitForTimeout(300);
       assert.equal(await chips.locator(".mchip").count(), 84);
       assert.deepEqual(await names(".mchip:not(.on)"), ids.filter((id) => !chosen.includes(id)));
       assert.equal(await chips.getByRole("button", { name: rest[lang], exact: true }).count(), 0);
       assert.deepEqual(await names(".mchip.on"), chosen, "opening the rest picks nothing");
-      assert.equal(await last.evaluate((e) => e.getBoundingClientRect().top), before, "the click moved the list");
+      // Replacing a full-width button with the last chip can remove a row.
+      // Only the inner list's resulting scroll clamp may move that chip.
+      const afterScroll = await chips.evaluate((e) => e.scrollTop);
+      assert.equal(afterScroll, await chips.evaluate((e, top) => Math.min(top, e.scrollHeight - e.clientHeight), scroll));
+      assert.equal(await editor.locator(".ebody").evaluate((e) => e.scrollTop), editorScroll, "the click moved the editor");
+      assert.equal(await last.evaluate((e) => e.getBoundingClientRect().top), before + scroll - afterScroll, "the click moved the list");
 
       // a chip clicked keeps the rest open
       await chips.locator(".mchip", { hasText: /^zen\/model-81$/ }).click();

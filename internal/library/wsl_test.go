@@ -227,6 +227,8 @@ func TestWSLMagpieImage(t *testing.T) {
 	}
 	reset()
 	t.Cleanup(func() { wslProbe = old; reset() })
+	// the Windows magpie this computer runs, as it would on Windows
+	thisMagpie(t, `D:\tools\Magpie\magpie-windows-amd64.exe`)
 
 	img := Server{Name: "magpie-image", Transport: "stdio", Command: `D:\tools\Magpie\magpie-windows-amd64.exe`, Args: []string{"mcp", "image"},
 		Env: map[string]string{"MAGPIE_ADDR": "127.0.0.1:4000"}, Agents: []string{wslCodex, wslClaude}}

@@ -65,7 +65,7 @@ const W = {
   },
   zh: {
     asks: "跟随 Claude Code 请求的推理强度", effort: (tier) => tier + " 推理强度", title: "haiku 推理强度", def: "默认", low: "低", high: "高",
-    sub: "子 agent 推理强度：默认\n跟随 Claude Code 请求的推理强度", sep: (l, v) => `${l}：${v}`,
+    sub: "子代理推理强度：默认\n跟随 Claude Code 请求的推理强度", sep: (l, v) => `${l}：${v}`,
   },
 };
 
@@ -128,6 +128,32 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.equal(await page.evaluate(() => scrollY), y, "a pick scrolled the page");
       // the session's effort is untouched
       assert.equal(await page.locator(`${cc} .field[data-key="effort"] .v`).textContent(), w.high);
+      assert.deepEqual(errors, []);
+    });
+  }
+}
+
+for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  for (const lang of ["en", "zh"]) {
+    test(`${engine} ${lang}: Claude Code tier pickers keep one width in a narrow window`, async (t) => {
+      const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+      const page = await browser.newPage({ viewport: { width: 560, height: 700 } });
+      page.setDefaultTimeout(5000);
+      const errors = [];
+      page.on("pageerror", (e) => errors.push(e.message));
+      await page.route("**/*", server(lang, []));
+      t.after(() => browser.close());
+      await page.goto("http://magpie.test/");
+      await page.locator(cc).waitFor();
+      await page.locator(`${cc} .ag-link`).click();
+      await page.locator(`${cc} .ag-exp`).waitFor();
+
+      const picks = page.locator(`${cc} .ag-exp .field.ag-pick`);
+      assert.equal(await picks.count(), tiers.length + 1);
+      const widths = await picks.evaluateAll((es) => es.map((e) => e.getBoundingClientRect().width));
+      assert.ok(widths.every((width) => Math.abs(width - widths[0]) < 0.5), `picker widths: ${widths.join(", ")}`);
+      assert.equal(Math.round(widths[0]), 220);
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "narrow Agents view must not overflow horizontally");
       assert.deepEqual(errors, []);
     });
   }

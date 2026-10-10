@@ -355,3 +355,53 @@ func TestModelHealthAnswerValidation(t *testing.T) {
 		}
 	}
 }
+
+// Retrieval and Gemini-only models cannot answer a Chat/Responses/Messages
+// probe. They must remain exposed, and no conversation probe may be sent.
+func TestModelHealthSkipsNonConversationEndpoints(t *testing.T) {
+	healthHome(t)
+	enableHealth(t, 1)
+	var mu sync.Mutex
+	seen := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.WriteHeader(503) // keep the cached per-model protocol metadata
+			return
+		}
+		var in struct{ Model string }
+		json.NewDecoder(r.Body).Decode(&in)
+		mu.Lock()
+		seen[in.Model]++
+		mu.Unlock()
+		w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer srv.Close()
+	p := Provider{ID: "relay", Chat: srv.URL + "/v1", Gemini: srv.URL + "/v1beta", Models: []string{"qwen", "text-embedding-3-small", "bge-reranker-v2-m3", "gemini-native"}}
+	if err := Save(p); err != nil {
+		t.Fatal(err)
+	}
+	ms := []catalog.Model{{ID: "qwen"}, {ID: "text-embedding-3-small"}, {ID: "bge-reranker-v2-m3"}, {ID: "gemini-native", APIs: []string{"gemini"}}}
+	if err := catalog.SaveLive(p.ID, p.Chat, ms); err != nil {
+		t.Fatal(err)
+	}
+	s, err := ScanModelHealth(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Records) != 1 {
+		t.Errorf("non-conversation models probed: %+v", s.Records)
+	}
+	for _, id := range p.Models {
+		if !ModelHealthAllows(p, id) {
+			t.Errorf("model %s wrongly blocked", id)
+		}
+	}
+	if got := p.Exposed(); len(got) != len(ms) {
+		t.Errorf("models wrongly hidden: %+v", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 1 || seen["qwen"] != 1 {
+		t.Fatalf("wrong probes sent: %+v", seen)
+	}
+}

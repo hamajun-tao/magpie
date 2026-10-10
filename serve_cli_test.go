@@ -8,9 +8,9 @@ import (
 	"github.com/yetone/magpie/internal/settings"
 )
 
-// The serve banner says the gateway takes any key only from this machine
-// while that is true: MAGPIE_ADDR on every interface (a Docker image) and
-// not shared from Settings is open to anyone who reaches it.
+// The serve banner says the gateway takes any key from this machine alone,
+// and, when MAGPIE_ADDR puts it on the network (a Docker image) or it is
+// shared from Settings, a gateway key from others: never from anyone.
 func TestKeyNote(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", os.Getenv("HOME"))
@@ -20,12 +20,12 @@ func TestKeyNote(t *testing.T) {
 		{"127.0.0.1:3426", "only listens on localhost"},
 		{"localhost:3426", "only listens on localhost"},
 		{"[::1]:3426", "only listens on localhost"},
-		{"0.0.0.0:3425", "anyone who reaches it"},
-		{":3425", "anyone who reaches it"},
-		{"192.168.1.5:3425", "anyone who reaches it"},
+		{"0.0.0.0:3425", "from others, an enabled gateway key"},
+		{":3425", "from others, an enabled gateway key"},
+		{"192.168.1.5:3425", "from others, an enabled gateway key"},
 	} {
 		t.Setenv("MAGPIE_ADDR", c.addr)
-		if n := keyNote(); !strings.Contains(n, c.want) {
+		if n := keyNote(); !strings.Contains(n, c.want) || strings.Contains(n, "anyone") {
 			t.Errorf("MAGPIE_ADDR=%q: %q", c.addr, n)
 		}
 	}

@@ -3,13 +3,13 @@ package provider
 import (
 	"context"
 	"net/url"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/yetone/magpie/internal/plugin"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 // A plugin's browser sign-in that comes back to a port of the plugin's on
@@ -18,10 +18,7 @@ import (
 // only this sign-in's port is taken, a page that sends the browser on is
 // the next page to open, a wrong code fails, the right one signs in.
 func TestPluginSignInTakesAPastedCallback(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	claudeHome(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Setenv("FAKE_LOOPBACK", "1")

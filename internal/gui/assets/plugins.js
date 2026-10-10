@@ -70,11 +70,29 @@
   const onNPM = (spec) => !isPath(spec) && !isGit(spec);
   // the providers a plugin signs in to, as the add sheet knows them
   const subsOf = (pkg) => (providers?.plugins || []).filter((x) => name(x.spec) === pkg);
+  // whether version a comes after b, in semver's order, the same as
+  // update.Newer, which puts the dot on Plugins: a pre-release before its
+  // release, numbers in it as numbers ("beta.10" after "beta.9"), a number
+  // before a word, a shorter list first; build metadata ("+…") ignored. A
+  // version that isn't x.y.z is never newer.
   const newer = (a, b) => {
-    const p = (v) => (v || "").split(/[.+-]/).slice(0, 3).map((x) => parseInt(x, 10) || 0);
+    const p = (v) => {
+      const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-([^+]*))?(?:\+.*)?$/.exec(String(v || "").trim());
+      return m && { n: [+m[1], +m[2], +m[3]], pre: m[4] || "" };
+    };
     const [x, y] = [p(a), p(b)];
-    for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
-    return false;
+    if (!x || !y) return false;
+    for (let i = 0; i < 3; i++) if (x.n[i] !== y.n[i]) return x.n[i] > y.n[i];
+    if (x.pre === y.pre) return false;
+    if (!x.pre || !y.pre) return !x.pre;
+    const [s, u] = [x.pre.split("."), y.pre.split(".")];
+    for (let i = 0; i < s.length && i < u.length; i++) {
+      const [d, e] = [/^\d+$/.test(s[i]), /^\d+$/.test(u[i])];
+      if (d && e) { if (+s[i] !== +u[i]) return +s[i] > +u[i]; }
+      else if (d !== e) return e;
+      else if (s[i] !== u[i]) return s[i] > u[i];
+    }
+    return s.length > u.length;
   };
 
   function glyph(d, size = 14, stroke = 1.5) { return svg(d, size, stroke); }
@@ -115,7 +133,7 @@
   // spec (its npm name when its author published it there from the
   // repository, else github:owner/repo)
   const ghListing = (r) => ({
-    package: r.spec, name: r.repo.split("/")[1], kind: r.kind, github: r,
+    package: r.spec, name: r.repo.split("/")[1], kind: r.kind, github: r, icon: r.icon || undefined,
     summary: r.description ? { en: r.description } : undefined,
     npm: { version: r.version || "", publisher: r.owner, repository: r.url, license: r.license, weekly: 0 },
   });
@@ -432,7 +450,8 @@
 
   // a repository's author put it here, nobody reviewed it: said on its card
   function unofficial() {
-    const u = el("span", "pm-chip warn", t("Unofficial"));
+    const u = el("span", "pm-chip warn");
+    u.append(el("span", "dot"), el("span", "", t("Unofficial")));
     u.title = t("Tagged {topic} on GitHub by its author. Nobody at magpie has read it: read its code before you install it", { topic });
     return u;
   }
@@ -795,6 +814,12 @@
     const subs = subsOf(pkg);
     const sub = el("div", "sub");
     const cands = e.off ? [] : movableOf(pkg);
+    // a provider another installed plugin signs in to as well (neiko on
+    // Discord: a third-party plugin and their own one both name it). One
+    // of them serves it; the row says which, and the other gets a way to
+    // take it over, rather than the provider just going missing
+    const clashes = e.off || e.error ? [] : e.clashes || [];
+    const nameOfSpec = (spec) => { const o = (mine?.plugins || []).find((x) => x.spec === spec); return o ? shownName(o) : label(spec); };
     const ask = asking?.pkg === pkg && !busy.size && (asking.op === "move" ? cands.length : moved.length) ? asking.op : "";
     if (ask === "move") {
       sub.textContent = t("{names} can run on it again, with the same accounts.", { names: cands.map((c) => c.name).join(t(", ")) });
@@ -817,8 +842,11 @@
       }
     } else if (mw && !e.providers.length) {
       // only middleware: its own line says what it does
+    } else if (clashes.length && !e.providers.length) {
+      // its own line below says whose it is
     } else sub.textContent = e.providers.length ? t("Signs in to {names}", { names: e.providers.join(t(", ")) }) : t("Signs in to nothing magpie can use");
     if (sub.textContent) who.append(sub);
+    if (!ask) for (const c of clashes) who.append(clashLine(e, c, nameOfSpec));
     if (mw && !e.off && !ask) who.append(mwLine(mw));
     if (mw && !e.off && !ask && editing?.pkg === pkg) who.append(optionsEditor(e));
     r.append(logo(l?.icon || subs[0]?.icon, false, e.middlewareOnly), who);
@@ -847,6 +875,13 @@
       mv.disabled = busy.size > 0;
       mv.onclick = () => move(here);
       val.append(mv);
+    }
+    for (const c of ask ? [] : clashes.filter((c) => c.by !== e.spec)) {
+      const u = el("button", "text", b === "prefer" ? t("Switching…") : t("Use for {name}", { name: c.name }));
+      u.title = t("{name} runs on this plugin instead of {other}; both stay installed", { name: c.name, other: nameOfSpec(c.by) });
+      u.disabled = busy.size > 0;
+      u.onclick = () => act(pkg, "prefer", { spec: e.spec, provider: c.id }, () => status(t("{name} now runs on {plugin}", { name: c.name, plugin: shownName(e) }), "ok"));
+      val.append(u);
     }
     if (!e.off && !e.error && subs.some((x) => !x.signedIn)) {
       // signed in to one of its subscriptions already (Qoder, beside Qoder
@@ -958,6 +993,20 @@
   // mwLine is a middleware's line in its plugin's row: its hooks, how many
   // calls and how long each took, and the calls that failed (which went on
   // as if it weren't there), or why it didn't load
+  // clashLine is one provider two installed plugins both sign in to, as
+  // the row of either says it: served here, or served by the other one
+  function clashLine(e, c, nameOfSpec) {
+    const d = el("div", "sub pm-clash" + (c.by === e.spec ? "" : " warn"));
+    const others = (c.by === e.spec ? c.with : [c.by]).map(nameOfSpec).join(t(", "));
+    d.append(el("span", "dot"), el("span", "", c.by === e.spec
+      ? t("{other} signs in to {name} too; this one serves it", { name: c.name, other: others })
+      : t("{name} is served by {other}, which signs in to it too", { name: c.name, other: others })));
+    d.title = c.by === e.spec
+      ? t("Two plugins sign in to {name}; magpie runs it on one. Use for {name} on the other one's row switches it", { name: c.name })
+      : t("Two plugins sign in to {name}; magpie runs it on one. Use for {name} switches it to this one, or remove the one you don't want", { name: c.name });
+    return d;
+  }
+
   function mwLine(m) {
     const d = el("div", "sub pm-mw");
     if (m.error) {

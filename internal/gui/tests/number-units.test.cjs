@@ -175,7 +175,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           assert.equal(await segs.nth(0).evaluate((b) => b.classList.contains("on")), true, "K/M/B starts picked");
           // scrolled down by a real wheel, a pick moves nothing
           await p.locator("#currencySegs").hover();
-          for (let i = 0; i < 20 && !(await settingsView(p)); i++) { await p.mouse.wheel(0, 200); await p.waitForTimeout(20); }
+          // Keep the units control in view and finish the native wheel
+          // before testing whether its click moves the page.
+          for (let i = 0; i < 20 && !(await settingsView(p)); i++) { await p.mouse.wheel(0, 40); await p.waitForTimeout(700); }
           const before = await settingsView(p);
           assert(before > 0, "the settings list must be long enough to scroll");
           await segs.nth(1).click();

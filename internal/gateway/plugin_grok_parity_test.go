@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 // besideFake installs the fake plugin as the plugin of the built-in id,
@@ -23,10 +23,7 @@ import (
 // key, its requests going to up; it gives the provider's id.
 func besideFake(t *testing.T, id string, up http.Handler) string {
 	t.Helper()
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	fresh(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Setenv("FAKE_ID", id)
@@ -175,5 +172,54 @@ func TestGrokPluginSearchesItself(t *testing.T) {
 	}
 	if pid != "grok-plugin" || !searchesItself(*p, provider.Responses) || searchesItself(*p, provider.Chat) {
 		t.Fatalf("%s searches by itself: %v on Responses, %v on Chat", pid, searchesItself(*p, provider.Responses), searchesItself(*p, provider.Chat))
+	}
+}
+
+// A Codex subagent's plain agent_message reaches the Grok plugin as the
+// user's message, as with the built-in (TestGrokGetsAgentMessageAsUser):
+// streamed, as Codex asks, the request is relayed, not translated.
+func TestGrokPluginGetsAgentMessageAsUser(t *testing.T) {
+	var mu sync.Mutex
+	var sent []map[string]any
+	pid := besideFake(t, "grok", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var q map[string]any
+		json.Unmarshal(b, &q)
+		mu.Lock()
+		sent = append(sent, q)
+		mu.Unlock()
+		done := `{"id":"r1","object":"response","status":"completed","output":[{"type":"message","id":"m1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":5,"output_tokens":1}}`
+		if q["stream"] != true {
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, done)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(
+			`event: response.created`+"\n"+`data: {"type":"response.created","response":{"id":"r1","object":"response","status":"in_progress","output":[]}}`,
+			`event: response.completed`+"\n"+`data: {"type":"response.completed","response":`+done+`}`))
+	}))
+	rec := httptest.NewRecorder()
+	New().Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"`+pid+`/fake-resp","stream":true,`+agentMessageTurn+`}`)))
+	if rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(sent) != 1 {
+		t.Fatalf("asked %d times", len(sent))
+	}
+	checkAgentMessageSent(t, sent[0])
+}
+
+// A Grok model the Grok plugin serves writes Codex's integers as floats
+// too; Codex reads them as integers, as from a relay
+// (TestGrokCallsGiveCodexIntegers), streamed in deltas or whole.
+func TestGrokPluginCallsGiveCodexIntegers(t *testing.T) {
+	c := integralCases(t)[0]
+	t.Setenv("FAKE_GROK", "1")
+	pid := besideFake(t, "grok", responsesCall(c.tool, c.args, someCuts(c.args)["by byte"]))
+	for _, stream := range []bool{true, false} {
+		checkResponses(t, c, askGrok(t, "/v1/responses", codexShellTurn(pid+"/grok-4.7", stream)), stream)
 	}
 }

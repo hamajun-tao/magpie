@@ -221,4 +221,10 @@ func TestImportGoogleAccounts(t *testing.T) {
 	if _, err := ImportGoogleAccounts(context.Background(), "antigravity", []string{"{broken"}); err == nil {
 		t.Error("broken JSON imported")
 	}
+	// one broken file among several is listed by its place, not passed over
+	// (#1453)
+	res, err = ImportGoogleAccounts(context.Background(), "antigravity", []string{cockpit, "{broken"})
+	if err != nil || len(res) != 4 || res[3].File != 2 || res[3].User != "" || res[3].Status != "failed" || res[3].Error == "" {
+		t.Errorf("a broken file among several = %+v, %v", res, err)
+	}
 }

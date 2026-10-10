@@ -108,7 +108,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
             const box = await anthropic.boundingBox();
             if (box && box.y > 80 && box.y + box.height < 340 && (await scroll()) > 0) break;
             await page.mouse.wheel(0, 120);
-            await page.waitForTimeout(30);
+            // WebKitGTK's wheel scroll is animated; record the click's
+            // baseline after it has finished moving the switch.
+            await page.waitForTimeout(700);
           }
           const before = await scroll();
           assert(before > 0, "the settings must be scrolled to the switch");

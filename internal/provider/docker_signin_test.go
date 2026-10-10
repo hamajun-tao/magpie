@@ -208,10 +208,7 @@ func TestCommandCodeSignInPastedKey(t *testing.T) {
 // bash" in Docker, where there's no shell to run it: the CLI is installed
 // first, as it is for a moved one.
 func TestGrokPluginSignInInstallsCLI(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	home := claudeHome(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Cleanup(plugin.Settle)

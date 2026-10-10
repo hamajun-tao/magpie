@@ -132,18 +132,36 @@ func TestCrushInstructionsWhereCrushReadsThem(t *testing.T) {
 	}
 }
 
-// Alma takes skills, in ~/.config/alma/skills (#824), but has no
-// user-wide place for instructions or MCP servers, and the library says so
-// rather than recording it as given any.
+// Alma takes skills, in ~/.config/alma/skills (#824), and MCP servers, in
+// ~/.config/alma/mcp.json (#1292), but has no user-wide place for
+// instructions, and the library says so rather than recording it as given
+// any.
 func TestTakesRefusesAlma(t *testing.T) {
 	sandbox(t)
-	for _, kind := range []string{"instructions", "mcp"} {
-		if id, err := Takes("alma", kind); err == nil || !strings.Contains(err.Error(), "Alma has no user-wide place") {
+	if id, err := Takes("alma", "instructions"); err == nil || !strings.Contains(err.Error(), "Alma has no user-wide place") {
+		t.Errorf("instructions: %q %v", id, err)
+	}
+	for _, kind := range []string{"skills", "mcp"} {
+		if id, err := Takes("alma", kind); err != nil || id != "alma" {
 			t.Errorf("%s: %q %v", kind, id, err)
 		}
 	}
-	if id, err := Takes("alma", "skills"); err != nil || id != "alma" {
-		t.Errorf("skills: %q %v", id, err)
+}
+
+// Claude Desktop keeps its instructions in its own settings and OpenChamber
+// reads OpenCode's: the refusal says where they go instead, and lists the
+// agents here that take that kind (MOMO on Discord: "has no user-wide
+// place" said neither).
+func TestTakesSaysWhereInstead(t *testing.T) {
+	sandbox(t)
+	_, err := Takes("claude-desktop", "instructions")
+	if err == nil || !strings.Contains(err.Error(), "give them to claude") || !strings.Contains(err.Error(), "agents here that take instructions: ") || !strings.Contains(err.Error(), "gemini") {
+		t.Errorf("claude-desktop instructions: %v", err)
+	}
+	for _, kind := range []string{"instructions", "mcp", "skills"} {
+		if _, err := Takes("openchamber", kind); err == nil || !strings.Contains(err.Error(), "give them to opencode") {
+			t.Errorf("openchamber %s: %v", kind, err)
+		}
 	}
 }
 
@@ -750,7 +768,7 @@ func TestSkillsFromGitHub(t *testing.T) {
 		t.Error("the tarball wrote outside its folder")
 	}
 	version = "two"
-	ok(t)(UpdateSkill("pdf"))
+	ok(t)(UpdateSkill("pdf", false))
 	v, _ := Read(nil)
 	if v.Skills[0].Description != "PDFs two" || v.Skills[0].Source != in+"/pdf" {
 		t.Errorf("after update: %+v", v.Skills[0])
@@ -758,8 +776,9 @@ func TestSkillsFromGitHub(t *testing.T) {
 	if !ours(filepath.Join(h, ".claude/skills/pdf"), "pdf") {
 		t.Error("claude's link went in the update")
 	}
-	if _, err := InstallSkills(in, []string{"skills/pdf"}, nil); err == nil {
-		t.Error("installed twice")
+	// installed again, it is had already: not copied a second time
+	if r := ok(t)(InstallSkills(in, []string{"skills/pdf"}, nil)); len(r.Installed) != 0 || !slices.Equal(r.Had, []string{"pdf"}) {
+		t.Errorf("installed twice: %v, had %v", r.Installed, r.Had)
 	}
 }
 
@@ -856,6 +875,7 @@ func TestReadNoAgents(t *testing.T) {
 func TestPiMCP(t *testing.T) {
 	h := sandbox(t)
 	p := filepath.Join(h, ".pi/agent/mcp.json")
+	write(t, filepath.Join(h, ".pi/agent/settings.json"), `{"packages": ["npm:pi-mcp-adapter@2.9.1"]}`)
 	write(t, p, `{"mcpServers": {"supabase": {"transport": "streamable-http", "url": "https://mcp.supabase.com/mcp", "lifecycle": "eager"}}}`)
 	tg := targetByID("pi")
 	if tg == nil || tg.MCP == nil || tg.MCP.Path != p {
@@ -890,6 +910,7 @@ func TestPiMCPAdapter3(t *testing.T) {
 	d := filepath.Join(h, ".pi/agent")
 	old, adapter := filepath.Join(d, "mcp.json"), filepath.Join(d, "mcp-adapter.json")
 	pkg := filepath.Join(d, "npm/node_modules/pi-mcp-adapter/package.json")
+	write(t, filepath.Join(d, "settings.json"), `{"packages": ["npm:pi-mcp-adapter"]}`)
 	write(t, old, `{"mcpServers": {"mine": {"command": "npx", "args": ["x"]}}}`)
 	write(t, pkg, `{"name": "pi-mcp-adapter", "version": "2.9.1"}`)
 	if tg := targetByID("pi"); tg.MCP.Path != old {
@@ -1165,10 +1186,16 @@ func TestDshServerName(t *testing.T) {
 func TestDshImportKeepsJS(t *testing.T) {
 	h := sandbox(t)
 	p := filepath.Join(h, ".dsh/profiles/web/cordis.patch.yml")
-	write(t, p, "- insert:\n    - id: mcp-engram\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: engram\n        transport: stdio\n        command: engram\n        cwd: !!js process.cwd()\n        env:\n          HOME: !!js process.env.HOME\n")
+	write(t, p, "- insert:\n    - id: mcp-engram\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: engram\n        transport: stdio\n        command: engram\n        cwd: !!js process.cwd()\n        env:\n          HOME: !!js require('os').homedir()\n")
 	v, _ := Read(nil)
 	if len(v.FoundServers) != 0 {
 		t.Errorf("an env dsh works out read as a server: %+v", v.FoundServers)
+	}
+	// a variable read whole is the library's reference (#1435)
+	write(t, p, "- insert:\n    - id: mcp-engram\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: engram\n        transport: stdio\n        command: engram\n        cwd: !!js process.cwd()\n        env:\n          HOME: !!js process.env.HOME\n")
+	v, _ = Read(nil)
+	if len(v.FoundServers) != 1 || v.FoundServers[0].Server.Env["HOME"] != "${HOME}" {
+		t.Errorf("found: %+v", v.FoundServers)
 	}
 	write(t, p, "- insert:\n    - id: mcp-engram\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: engram\n        transport: stdio\n        command: engram\n        cwd: !!js process.cwd()\n")
 	ok(t)(ImportServer("engram"))

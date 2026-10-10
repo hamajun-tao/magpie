@@ -11,7 +11,9 @@
 // matches the text it was made for — and one placeholder is never two
 // values. The values are held in memory only, by placeholder, as requests
 // bring them; a restart loses nothing, since the next request brings them
-// again.
+// again. A value once masked is masked wherever a request has it, whatever
+// words are around it (known.go): the vendor writes about a placeholder in
+// words no rule knows, and the agent sends that text back with the value.
 package redact
 
 import (
@@ -34,18 +36,63 @@ type Options struct {
 	Personal bool     // emails, phone numbers, ID and bank card numbers
 	Words    []string // the user's own: names, codenames, hosts
 	Rules    []Rule   // the user's own rules, masked with the secrets
+	// Kinds turns each of the Categories of personal data on or off by its
+	// id, where the user chose; one not in it is as its Category.On says.
+	// None of them is masked while Personal is off.
+	Kinds map[string]bool
+}
+
+// covers says o masks what a rule of category cat finds: "" are the
+// secrets, catPersonal the personal data always masked with it, any other
+// one of the Categories.
+func (o Options) covers(cat string) bool {
+	switch cat {
+	case "":
+		return o.Secrets
+	case catPersonal:
+		return o.Personal
+	}
+	if !o.Personal {
+		return false
+	}
+	if on, ok := o.Kinds[cat]; ok {
+		return on
+	}
+	return categoryOn[cat]
 }
 
 // rule finds one kind of value. The match is group 1 when the pattern has
 // one, else all of it; bound are the characters that may not touch it on
 // either side (a key inside a longer word is no key); ok checks it further.
 type rule struct {
-	kind     string
-	re       *regexp.Regexp
-	markers  []string // one of these is in any text it can match
-	bound    string
-	ok       func(string) bool
-	personal bool
+	kind    string
+	re      *regexp.Regexp
+	markers []string // one of these is in any text it can match
+	// fold are markers too, looked for in the text in lower case, for a
+	// pattern that matches its words in any case (Passport, PASSPORT)
+	fold  []string
+	bound string
+	ok    func(string) bool
+	// at checks the value at s[a:b] by what is around it: a dotted quad
+	// right after "version" is no address
+	at func(s string, a, b int) bool
+	// fix, where set, checks the value in place of ok and may shorten it:
+	// an IBAN printed in groups of four, followed by a word in capitals
+	fix func(s string, a, b int) (int, int, bool)
+	// back and ahead, where ahead is set, are how far before and after
+	// one of fold a match can be: the pattern is only run there, as one
+	// that takes its words in any case is slow over all of a long text
+	back, ahead int
+	// cat is what turns the rule on (Options.covers): "" the secrets
+	cat string
+	// anyGroup takes the first group that matched, for a pattern with a
+	// group in each of its alternatives
+	anyGroup bool
+	// groups, where set, are the kinds of a match's groups, each masked as
+	// a value of its own (the user and the host of user@host), and groupOK
+	// checks each
+	groups  []string
+	groupOK []func(string) bool
 }
 
 const (
@@ -54,7 +101,7 @@ const (
 	digits  = "0123456789"
 )
 
-var rules = []rule{
+var rules = append([]rule{
 	{kind: "PRIVATE_KEY", re: regexp.MustCompile(`-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----[\s\S]+?-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----`), markers: []string{"PRIVATE KEY"}},
 	{kind: "API_KEY", re: regexp.MustCompile(`sk-(?:ant-|proj-|or-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}`), markers: []string{"sk-"}, bound: tokenCh},
 	// a gateway's or a relay's own: oc_sk_…, or_sk_… (#195)
@@ -78,11 +125,11 @@ var rules = []rule{
 	{kind: "SECRET", re: regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_.-])` + quote + `key` + quote + `[ \t]*[:=][ \t]*` + quote + `(` + secretCh + `{16,})`),
 		markers: fieldNames{{"key", "key"}}.markers(), ok: secretValue},
 
-	{kind: "EMAIL", re: regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}`), markers: []string{"@"}, bound: alnum + "._%+-", ok: realEmail, personal: true},
-	{kind: "ID_CARD", re: regexp.MustCompile(`[1-9]\d{5}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]`), bound: alnum, ok: chineseID, personal: true},
-	{kind: "PHONE", re: regexp.MustCompile(`(?:\+?86[- ]?)?1[3-9]\d{9}`), bound: digits, personal: true},
-	{kind: "BANK_CARD", re: regexp.MustCompile(`[3-6]\d{3}(?:[ -]?\d{4}){2,3}(?:[ -]?\d{1,3})?`), bound: digits, ok: luhn, personal: true},
-}
+	{kind: "EMAIL", re: regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}`), markers: []string{"@"}, bound: alnum + "._%+-", ok: realEmail, cat: catPersonal},
+	{kind: "ID_CARD", re: regexp.MustCompile(`[1-9]\d{5}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]`), bound: alnum, ok: chineseID, cat: catPersonal},
+	{kind: "PHONE", re: regexp.MustCompile(`(?:\+?86[- ]?)?1[3-9]\d{9}`), bound: digits, cat: catPersonal},
+	{kind: "BANK_CARD", re: regexp.MustCompile(`[3-6]\d{3}(?:[ -]?\d{4}){2,3}(?:[ -]?\d{1,3})?`), bound: digits, ok: luhn, cat: catPersonal},
+}, moreRules...)
 
 // fieldNames are what a field that holds a secret is called: a pattern for
 // each name, and text that any match of it has in it, so a rule's markers
@@ -263,8 +310,10 @@ func placeholder(kind, v string) string {
 					break
 				}
 			}
+			reindexKnown()
 		}
 		values[p] = v
+		addKnown(p, v)
 	}
 	mu.Unlock()
 	return p
@@ -305,30 +354,156 @@ func mask(s string, o Options, put func(kind, v string) string) (string, int) {
 		// the same value, it goes by the name they gave it
 		all = append(customRules(o.Rules), rules...)
 	}
+	lower := ""
+	// split are matches a rule took apart into values of their own
+	// (rkato@box17 as a user and a host): what another rule found from
+	// the same place in them, an email, goes
+	var split []span
 	for _, r := range all {
-		if r.personal && !o.Personal || !r.personal && !o.Secrets {
+		if !o.covers(r.cat) {
 			continue
 		}
 		if len(r.markers) > 0 && !containsAny(s, r.markers) {
 			continue
 		}
-		for _, m := range r.re.FindAllStringSubmatchIndex(s, -1) {
+		if len(r.fold) > 0 {
+			if lower == "" {
+				lower = lowerASCII(s)
+			}
+			if !containsAny(lower, r.fold) {
+				continue
+			}
+		}
+		for _, m := range r.matches(s, lower) {
+			if len(r.groups) > 0 {
+				took := false
+				for g, kind := range r.groups {
+					if a, b := m[2*g+2], m[2*g+3]; a >= 0 && r.takes(s, a, b, r.groupOK[g]) {
+						found = append(found, span{a, b, kind})
+						took = true
+					}
+				}
+				if took {
+					split = append(split, span{m[2], m[1], ""})
+				}
+				continue
+			}
 			a, b := m[0], m[1]
-			if len(m) >= 4 && m[2] >= 0 {
-				a, b = m[2], m[3]
+			for g := 1; 2*g+1 < len(m); g++ {
+				if m[2*g] >= 0 {
+					a, b = m[2*g], m[2*g+1]
+					break
+				}
+				if !r.anyGroup {
+					break
+				}
 			}
-			if b <= a {
-				continue
+			ok := r.ok
+			if r.fix != nil {
+				var good bool
+				if a, b, good = r.fix(s, a, b); !good {
+					continue
+				}
+				ok = nil
 			}
-			if r.bound != "" && (a > 0 && strings.IndexByte(r.bound, s[a-1]) >= 0 || b < len(s) && strings.IndexByte(r.bound, s[b]) >= 0) {
-				continue
+			if r.takes(s, a, b, ok) {
+				found = append(found, span{a, b, r.kind})
 			}
-			if r.ok != nil && !r.ok(s[a:b]) {
-				continue
-			}
-			found = append(found, span{a, b, r.kind})
 		}
 	}
+	for _, sp := range split {
+		found = slices.DeleteFunc(found, func(f span) bool {
+			return f.kind == "EMAIL" && f.start == sp.start && f.end <= sp.end
+		})
+	}
+	// after the rules', so where a rule finds the same value it keeps the
+	// kind it has always had
+	found = append(found, knownSpans(s, o)...)
+	return apply(s, found, put)
+}
+
+// matches are r's matches in s, lower being lowerASCII(s), as
+// FindAllStringSubmatchIndex has them: in all of s, or, for a rule with
+// ahead set, only around its fold markers.
+func (r rule) matches(s, lower string) [][]int {
+	if r.ahead == 0 {
+		return r.re.FindAllStringSubmatchIndex(s, -1)
+	}
+	var wins [][2]int
+	for _, f := range r.fold {
+		for i := 0; ; {
+			j := strings.Index(lower[i:], f)
+			if j < 0 {
+				break
+			}
+			at := i + j
+			i = at + len(f)
+			// from the line's start, or from where a word starts no further
+			// back than back: what the pattern takes for the text's start is
+			// where a line or a word starts in s too
+			start := strings.LastIndexByte(s[:at], '\n') + 1
+			if start < at-r.back {
+				start = at - r.back
+				for start < at && (strings.IndexByte(alnum+"_.-", s[start-1]) >= 0 || s[start]&0xc0 == 0x80) {
+					start++
+				}
+				if start == at && strings.IndexByte(alnum+"_", s[at-1]) >= 0 {
+					continue // inside a longer word
+				}
+			}
+			wins = append(wins, [2]int{start, min(len(s), i+r.ahead)})
+		}
+	}
+	sort.Slice(wins, func(i, j int) bool { return wins[i][0] < wins[j][0] })
+	var out [][]int
+	for k := 0; k < len(wins); k++ {
+		w := wins[k]
+		for k+1 < len(wins) && wins[k+1][0] <= w[1] {
+			k++
+			w[1] = max(w[1], wins[k][1])
+		}
+		for _, m := range r.re.FindAllStringSubmatchIndex(s[w[0]:w[1]], -1) {
+			for x := range m {
+				if m[x] >= 0 {
+					m[x] += w[0]
+				}
+			}
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// lowerASCII is s with its ASCII letters in lower case, as long as s, so a
+// place in one is the same place in the other.
+func lowerASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
+}
+
+// takes says s[a:b] is a value r masks: nothing it may not touch beside
+// it, and its checks pass.
+func (r rule) takes(s string, a, b int, ok func(string) bool) bool {
+	if b <= a {
+		return false
+	}
+	if r.bound != "" && (a > 0 && strings.IndexByte(r.bound, s[a-1]) >= 0 || b < len(s) && strings.IndexByte(r.bound, s[b]) >= 0) {
+		return false
+	}
+	if ok != nil && !ok(s[a:b]) {
+		return false
+	}
+	return r.at == nil || r.at(s, a, b)
+}
+
+// apply swaps each of found in s for what put makes of its value, the
+// first and longest where they overlap, nothing inside a placeholder.
+func apply(s string, found []span, put func(kind, v string) string) (string, int) {
 	if len(found) == 0 {
 		return s, 0
 	}

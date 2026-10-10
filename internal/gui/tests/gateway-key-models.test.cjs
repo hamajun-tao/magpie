@@ -36,7 +36,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const scrolled = async () => [await view.evaluate((v) => v.scrollTop), await page.evaluate(() => window.scrollY)];
       await page.mouse.move(500, 300);
       await page.mouse.wheel(0, 120);
-      await page.waitForTimeout(100);
+      // WebKit applies the wheel over several frames; record the position
+      // after it reaches its destination, before testing clicks.
+      await page.waitForFunction(() => document.querySelector("#view-gateway").scrollTop === 120);
       const at = await scrolled();
       // the app's menu, not a native select
       await row("work").hover();

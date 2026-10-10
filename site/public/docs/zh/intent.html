@@ -46,6 +46,8 @@
     <a href="/docs/zh/start">快速上手</a>
     <a href="/docs/zh/intent">意图路由</a>
     <a href="/docs/zh/plugins">插件开发</a>
+    <a class="toc-only" href="/docs/zh/remote">远程 magpie</a>
+    <a class="toc-only" href="/docs/zh/docker">Docker</a>
     <a href="/docs/zh/import">Add to magpie</a>
     <a href="/docs/zh/integrate">接入应用</a>
     <a href="https://github.com/yetone/magpie-releases/releases">版本发布</a>
@@ -99,8 +101,8 @@
     <p>你需要一个至少有两个模型的<a href="/docs/zh/start#routing">路由组</a>，再加一个用来判断意图的模型。这个模型可以是 magpie 里的任意模型，在不在组里都行。</p>
     <ol class="steps">
       <li><b>打开分组</b>进入<span class="ui">路由</span>页，在「路由组」里找到分组，点<span class="ui">编辑</span>。</li>
-      <li><b>添加带意图的规则</b>点<span class="ui">添加规则</span>，在<span class="ui">先发给</span>里选模型，点<span class="ui">意图是</span>，写下这类消息想做什么，例如 <em>writing or fixing tests</em> 或「写测试或修测试」。同一条规则上的其他条件也必须同时满足。</li>
-      <li><b>选择意图判断模型</b>有规则带意图后，下方会出现<span class="ui">意图判断模型</span>。建议选小而快、不带推理的模型。有意图却没有判断模型时，分组无法保存。</li>
+      <li><b>添加带意图的规则</b>点<span class="ui">按意图分流</span>（或<span class="ui">添加规则</span>），在<span class="ui">先发给</span>里选模型，点<span class="ui">意图是</span>，写下这类消息想做什么，例如 <em>writing or fixing tests</em> 或「写测试或修测试」。同一条规则上的其他条件也必须同时满足。</li>
+      <li><b>选择意图判断模型</b>有规则带意图后，下方会出现<span class="ui">意图判断模型</span>；有 TypeSafe provider 时默认就是 Jev，否则建议选小而快、不带推理的模型。已经让 Jev 选推理强度的分组，判断模型下方也有同一个入口：<span class="ui">它也能挑模型</span>。有意图却没有判断模型时，分组无法保存。</li>
       <li><b>保存，然后发条消息</b>从下一轮起生效，不用重启。<span class="ui">路由</span>页会显示判断模型说了什么、这一轮去了哪里。</li>
     </ol>
     <p>命令行里也可以设置：</p>
@@ -119,7 +121,7 @@ magpie group rule rm coder 2</pre>
     <h2 id="how"><a class="anchor" href="#how">一轮是怎么路由的</a></h2>
     <p>Agent 发往带规则的分组的每个请求，都按下面的顺序处理：</p>
     <ol class="steps">
-      <li><b>是不是新的一轮？</b>magpie 看请求里最后一条用户消息：带文字或图片、不带工具结果，说明是你刚刚发言，新的一轮开始；带工具结果，说明是 Agent 在继续进行中的一轮（见<a href="#turn">这一轮的后续请求</a>）。轮次按会话分别计数。子 Agent 是单独的会话：它和主 Agent 共用一个 session，但第一句话不同。</li>
+      <li><b>是不是新的一轮？</b>magpie 看请求里最后一条用户消息：带文字或图片、不带工具结果，说明是你刚刚发言，新的一轮开始；带工具结果，说明是 Agent 在继续进行中的一轮（见<a href="#turn">这一轮的后续请求</a>）。轮次按会话分别计数。子代理是单独的会话：它和主代理共用一个 session，但第一句话不同。</li>
       <li><b>哪些意图可能起作用？</b>magpie 从上往下看规则，先不管意图：一条规则的其他条件（tokens、图片、推理、Agent）对这个请求都成立，它就是候选，把它的意图收集起来。只有大小写不同的意图算同一个。遇到第一条<em>不带</em>意图的候选规则就停止，因为它会直接命中，排在它下面的规则都轮不到。一个意图也没收集到时，不会询问意图判断模型，也不会产生费用。</li>
       <li><b>询问意图判断模型</b>把收集到的意图和你这条消息的文字发给它，完整提示词见<a href="#prompt">下文</a>。这个调用和 Agent 的请求一样，走 magpie 自己的网关，所以用的是该模型所属供应商的 Key 或账号，以及它们的故障转移。它有 8 秒时间作答。</li>
       <li><b>读取回答</b>取回答里出现的第一个整数：<code>1</code> 到 <code>n</code> 表示对应的意图，<code>0</code> 表示都不是。其他情况（没有数字、数字超出范围）这一轮都不命中意图。同一条消息、同一组意图的回答会缓存 10 分钟。</li>
@@ -197,7 +199,7 @@ The number of its kind (0 for none):</pre>
       <li><b>故障转移后留在接手的模型上。</b>规则指定的模型失败、由组里另一个成员接手后，这一轮剩下的请求都交给接手的成员（<span class="ui">会话保持</span>为「自动」「整个会话」或「一轮之内」时）。等你下次发言，规则再重新决定。</li>
       <li><b>超出上下文。</b>唯一的例外：这一轮进行中，会话涨到当前模型上下文的 95% 时，magpie 会沿用之前的判断结果重新检查一遍规则。如果有规则把它发往上下文<em>更大</em>的模型，就换过去；不会换到上下文更小的模型。</li>
       <li><b>等待下一轮。</b>如果 magpie 没看到这一轮开始（magpie 是在某一轮进行中启动或重启的），或者当初决定这一轮的规则被删除、或改成了发往别的模型，那么不会有规则移动这一轮，等你下次发言时再重新决定。</li>
-      <li><b>子 Agent。</b>子 Agent 的轮次单独决定，依据它自己的消息。规则可以把子 Agent 发往别处，而主 Agent 留在原来的模型上。</li>
+      <li><b>子代理。</b>子代理的轮次单独决定，依据它自己的消息。规则可以把子代理发往别处，而主代理留在原来的模型上。</li>
     </ul>
     <p>这些决定保存在内存里，保留到会话最后一个请求之后 24 小时。重启 magpie 会清空它们，下一条消息会重新决定。</p>
 
@@ -316,6 +318,8 @@ The number of its kind (0 for none):</pre>
     <a href="/zh/">首页</a>
     <a href="/docs/zh/intent">意图路由</a>
     <a href="/docs/zh/plugins">插件开发</a>
+    <a href="/docs/zh/remote">远程 magpie</a>
+    <a href="/docs/zh/docker">Docker</a>
     <a href="/docs/zh/import">Add to magpie</a>
     <a href="/docs/zh/integrate">接入应用</a>
     <a href="https://github.com/yetone/magpie">GitHub</a>

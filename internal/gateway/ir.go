@@ -48,11 +48,33 @@ type Part struct {
 	Images     []Part         // the images the tool returned beside its text
 	Standalone map[string]any // native Responses notification with no call ID
 
-	// thinking
+	// thinking: its signature (Anthropic's, or a Gemini thought's). On a
+	// tool call, and on text, Gemini's thoughtSignature: a tool call's
+	// comes only from Google, as gemini_signature.go carries it, and
+	// text's only from a Gemini API (#1445)
 	Signature string
+	// thinking an upstream sealed, as its API wrote it: Anthropic's
+	// redacted_thinking block, a Responses reasoning item with its id,
+	// summary and encrypted_content. Only that API's builder, encoder and
+	// renderer write it, byte for byte; to any other it is reasoning with
+	// no text, or Text's (#1445). SealedBy is the API (sealAnthropic,
+	// sealResponses).
+	Sealed   json.RawMessage
+	SealedBy string
 
 	// web_search: Text is the query
 	Hits []Hit
+}
+
+// The APIs a Part's Sealed reasoning is in.
+const (
+	sealAnthropic = "anthropic"
+	sealResponses = "responses"
+)
+
+// sealedBy reports whether p is reasoning api sealed.
+func (p Part) sealedBy(api string) bool {
+	return p.Kind == Thinking && p.SealedBy == api && len(p.Sealed) > 0
 }
 
 // Hit is a page a web search found.
@@ -76,6 +98,35 @@ func attachmentText(p Part) string {
 type Message struct {
 	Role  string // user | assistant
 	Parts []Part
+}
+
+// joinSplitCalls joins an assistant message onto the assistant message
+// before it when that one made tool calls: Anthropic's Messages takes
+// consecutive assistant messages as one turn, and an agent can send a
+// turn's parallel tool_use blocks split over two of them, answered by one
+// user message (#1275). A builder that closes a turn's calls at the next
+// assistant message would otherwise answer the first calls as interrupted
+// and lose their real results. ms is left as it is.
+func joinSplitCalls(ms []Message) []Message {
+	out := make([]Message, 0, len(ms))
+	for _, m := range ms {
+		if n := len(out); n > 0 && m.Role == "assistant" && out[n-1].Role == "assistant" && hasCalls(out[n-1].Parts) {
+			out[n-1].Parts = append(out[n-1].Parts, m.Parts...)
+			continue
+		}
+		out = append(out, Message{Role: m.Role, Parts: append([]Part(nil), m.Parts...)})
+	}
+	return out
+}
+
+// hasCalls reports whether parts hold a tool call.
+func hasCalls(parts []Part) bool {
+	for _, p := range parts {
+		if p.Kind == ToolCall {
+			return true
+		}
+	}
+	return false
 }
 
 // Tool is a function the model may call.
@@ -107,6 +158,19 @@ type Request struct {
 	Parallel  *bool // parallel tool calls allowed
 	WebSearch bool  // the client offered its provider's own web search
 	Fast      bool  // the client asked for priority processing: service_tier priority (Codex's Fast mode)
+	// Ultrafast is Codex's Ultrafast (service_tier "ultrafast"), which a
+	// ChatGPT account on a plan with it offers on its models; Fast is set
+	// with it, so where there is no Ultrafast the request goes fast
+	Ultrafast bool
+	// Tier is the service_tier the client sent, as it sent it. It goes on
+	// as it is to a provider the user added by its address (OwnTier):
+	// a relay of theirs may serve Fast and Ultrafast where magpie can't
+	// tell (hsiangron on X: both were left out)
+	Tier string
+	// OwnTier is set for such a provider (gateway.go, as each attempt is
+	// built); one that turns the field away is asked again without it
+	// (optionalFields)
+	OwnTier bool
 	// CacheKey is the client's prompt_cache_key (Codex sends its thread's
 	// id), which OpenAI, and relays in front of it, route a conversation by
 	// to where its prompt is cached.
@@ -117,9 +181,9 @@ type Request struct {
 	Include []string
 	// ClientMetadata and Text are a Responses client's client_metadata
 	// (Codex's installation and session ids, which a relay may check, #374)
-	// and text (its verbosity, and the schema an answer must fit), which go
-	// on as they were sent when the request is built again for a Responses
-	// upstream; no other API takes them.
+	// and text (its verbosity), which go on as they were sent when the
+	// request is built again for a Responses upstream; no other API takes
+	// them. text's format is read into Format.
 	ClientMetadata json.RawMessage
 	Text           json.RawMessage
 	// Metadata is an Anthropic client's metadata (Claude Code's user_id),
@@ -130,21 +194,37 @@ type Request struct {
 	// Safeguards are the caller's safety context, opaque to the gateway.
 	Safeguards    json.RawMessage
 	SafeguardBeta string
-	// Schema is the JSON schema an Anthropic client asked the answer to fit
-	// (output_config.format, of type json_schema).
-	Schema json.RawMessage
+	// Format is the shape the client asked the answer in (structured
+	// output: format.go), nil for plain text. Text, a Responses client's,
+	// holds it no more: it is asked for again in the upstream's own words.
+	Format *Format
 	// GeminiCompat is the upstream being Gemini's OpenAI-compatible API
 	// (AI Studio's, or a proxy in front of it on this machine or the LAN),
 	// which gives the model's thoughts only when asked in thinking_config.
 	GeminiCompat bool
+	// OffLevel is the level such an API is asked to think at when the
+	// client turned reasoning off: Gemini 3 can't stop thinking, and thinks
+	// least at minimal, or at its lowest level where it has no minimal
+	// (geminiOffLevel). "" is minimal.
+	OffLevel string
 	// Resume is set on a request built to go on with a reply the client
 	// already has part of (continuation.go): its last message is that
 	// part, an assistant message the model goes on from, not a turn
 	// answered.
 	Resume bool
+	// LastIsTurn is set on a request from a client whose API reads a
+	// conversation ending with the assistant's message as a turn already
+	// said, to answer after (OpenAI's Chat and Responses), not one to go
+	// on from (Anthropic's prefill): to a model that takes no prefill it
+	// is asked with a user turn after it (prefill.go).
+	LastIsTurn bool
 	// Namespaced are the tools a Responses client offered inside a
 	// namespace, by the flat name the model is offered them under.
 	Namespaced map[string]nsTool
+	// Grok is set when the model asked is one of Grok's, whose calls'
+	// arguments reach the client with their zero fractions dropped
+	// (grok_integral.go).
+	Grok bool
 }
 
 // nsTool is a tool as a Responses client knows it: by its namespace and its
@@ -173,6 +253,16 @@ const (
 	KError                      // Text
 	KSearch                     // Text (the query), Hits: a web search run for the model
 	KImage                      // Name (media type), Text (base64): an image the model made
+	// KThinkStart: a new block of reasoning begins (Anthropic's thinking
+	// block, a Responses reasoning item, ID its id): what follows is not
+	// the one before's, even with nothing between them
+	KThinkStart
+	// KSealed: Text is reasoning the upstream sealed, whole as its API
+	// wrote it, Name that API (Part.Sealed): Anthropic's redacted_thinking
+	// block, a Responses reasoning item as it was done
+	KSealed
+	// KTextSig: Text is Gemini's thoughtSignature on the text before it
+	KTextSig
 )
 
 // Event is one thing a streaming reply said.
@@ -287,7 +377,9 @@ type Result struct {
 type collector struct {
 	res  Result
 	args strings.Builder // arguments of the open tool call
-	err  string
+	// fresh: a KThinkStart said the next reasoning is a block of its own
+	fresh bool
+	err   string
 	// the error's status and kind, as its event gave them
 	errStatus int
 	errCode   string
@@ -296,6 +388,18 @@ type collector struct {
 func (c *collector) last(k Kind) *Part {
 	if n := len(c.res.Parts); n > 0 && c.res.Parts[n-1].Kind == k {
 		return &c.res.Parts[n-1]
+	}
+	return nil
+}
+
+// open is the reasoning the next of it goes on: the last part, when it is
+// reasoning not sealed whole, and no new block has begun since.
+func (c *collector) open() *Part {
+	if c.fresh {
+		return nil
+	}
+	if p := c.last(Thinking); p != nil && len(p.Sealed) == 0 {
+		return p
 	}
 	return nil
 }
@@ -326,16 +430,40 @@ func (c *collector) add(ev Event) {
 			c.closeTool()
 			c.res.Parts = append(c.res.Parts, Part{Kind: Text, Text: ev.Text})
 		}
+	case KThinkStart:
+		c.fresh = true
+		return
 	case KThink:
-		if p := c.last(Thinking); p != nil {
+		if p := c.open(); p != nil {
 			p.Text += ev.Text
 		} else {
 			c.closeTool()
 			c.res.Parts = append(c.res.Parts, Part{Kind: Thinking, Text: ev.Text})
 		}
 	case KSig:
-		if p := c.last(Thinking); p != nil {
+		// a block signed with no text in it (Claude's thinking when its
+		// display is omitted) is a block all the same (#1445)
+		if p := c.open(); p != nil {
 			p.Signature += ev.Text
+		} else if c.fresh {
+			c.closeTool()
+			c.res.Parts = append(c.res.Parts, Part{Kind: Thinking, Signature: ev.Text})
+		}
+	case KSealed:
+		// a Responses item's summary came before it as reasoning of its
+		// own: the item is that reasoning, sealed
+		if p := c.open(); p != nil && ev.Name == sealResponses && p.Signature == "" {
+			p.Sealed, p.SealedBy = json.RawMessage(ev.Text), ev.Name
+		} else {
+			c.closeTool()
+			c.res.Parts = append(c.res.Parts, Part{Kind: Thinking, Sealed: json.RawMessage(ev.Text), SealedBy: ev.Name})
+		}
+	case KTextSig:
+		if p := c.last(Text); p != nil && p.Signature == "" {
+			p.Signature = ev.Text
+		} else {
+			c.closeTool()
+			c.res.Parts = append(c.res.Parts, Part{Kind: Text, Signature: ev.Text})
 		}
 	case KToolStart:
 		c.closeTool()
@@ -356,6 +484,12 @@ func (c *collector) add(ev Event) {
 	case KImage:
 		c.closeTool()
 		c.res.Parts = append(c.res.Parts, Part{Kind: Image, MediaType: ev.Name, Data: ev.Text})
+	}
+	switch ev.Kind {
+	case KStart, KUsage, KError:
+	default:
+		// what began has had its first content, or something else came
+		c.fresh = false
 	}
 }
 

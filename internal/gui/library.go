@@ -345,6 +345,9 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			Keep   bool              // a project removed keeps what magpie put in it
 			On     bool              // every skill or server given to the agents, or taken from them
 			How    string            // link or copy: how skills are given to Agent, or to every agent with none (#896)
+			// Replace updates a skill changed here all the same, its
+			// changed version kept with the backups (#1449)
+			Replace bool
 			library.InstructionsChange
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -377,7 +380,7 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 		case "skills/install":
 			res, err = library.InstallSkills(in.Source, in.Paths, in.Agents)
 		case "skills/update":
-			res, err = library.UpdateSkill(in.Name)
+			res, err = library.UpdateSkill(in.Name, in.Replace)
 		case "skills/update-all":
 			res, err = library.UpdateSkills()
 		case "skills/update-some":
@@ -404,6 +407,8 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			res, err = library.ImportSkill(in.Name)
 		case "skills/import-all":
 			res, err = library.ImportSkills(in.Names)
+		case "skills/remove-found":
+			res, err = library.RemoveFoundSkill(in.Name)
 		case "skills/use-library":
 			res, err = library.UseLibrarySkill(in.Name, in.Agent)
 		case "skills/how":

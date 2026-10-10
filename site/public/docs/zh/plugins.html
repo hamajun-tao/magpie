@@ -46,6 +46,8 @@
     <a href="/docs/zh/start">快速上手</a>
     <a href="/docs/zh/intent">意图路由</a>
     <a href="/docs/zh/plugins">插件开发</a>
+    <a class="toc-only" href="/docs/zh/remote">远程 magpie</a>
+    <a class="toc-only" href="/docs/zh/docker">Docker</a>
     <a href="/docs/zh/import">Add to magpie</a>
     <a href="/docs/zh/integrate">接入应用</a>
     <a href="https://github.com/yetone/magpie-releases/releases">版本发布</a>
@@ -209,9 +211,9 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
       <li><b>代理。</b>插件为某个供应商或账号发出的每个 fetch，都走用户给这个供应商或账号设置的代理；没有设置就走 magpie 自己的代理，除非设成<em>直连</em>。回环地址从不走代理。自己传了 <code>proxy</code> 选项的 fetch 不会被改动。</li>
       <li><b>更新。</b>
         <ul>
-          <li>社区的包（<code>@magpie-community/*</code>）在 magpie 启动后不久自动更新，之后每六小时一次。</li>
+          <li>社区的包（<code>@magpie-community/*</code>）在 magpie 启动后不久自动更新，之后每小时一次。</li>
           <li>其他包有新版本时，<span class="ui">插件</span>上会出现一个小圆点，用户点一下或运行 <code>magpie plugin update</code> 更新。</li>
-          <li>固定了版本的写法（<code>name@1.2.3</code>）会停在那个版本。</li>
+          <li>固定了版本的写法（<code>name@1.2.3</code>）会停在那个版本，直到用户自己更新：<span class="ui">更新到 …</span>、<span class="ui">全部更新</span>和 <code>magpie plugin update</code> 会装上最新版并取消固定。</li>
         </ul></li>
     </ul>
     <p>magpie 在它的配置目录（<code>~/.config/magpie</code> 或 <code>$XDG_CONFIG_HOME/magpie</code>）里保存这些：</p>
@@ -540,6 +542,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
       <li>agent 用 <code>&lt;id&gt;/&lt;model&gt;</code> 指代插件的模型，id 就是插件的 <code>auth.provider</code>。</li>
       <li>这个 id 在 magpie 里已被占用时，比如内置订阅、预设（<code>google</code>、<code>openai</code>、<code>anthropic</code> 等）或 <code>magpie</code> 本身，插件的供应商会叫 <code>&lt;id&gt;-plugin</code>。请选一个只属于你的 id。</li>
       <li>社区为 magpie 已弃用的内置订阅做的插件是例外。它们用内置订阅的 id（<code>cursor</code>、<code>zed</code> 等），用户迁移到插件后就接管这个 id，agent 无需任何改动。</li>
+      <li>两个已安装的插件登录同一个 id 时（比如已发布的插件和你自己的副本），只由其中一个提供：选定的那个，否则是后添加的那个。两个插件都留在<span class="ui">插件 → 已安装</span>里，各自那一行会写明由哪个提供。在另一行点<span class="ui">用于 …</span>，或运行 <code>magpie plugin use &lt;名字&gt; &lt;id&gt;</code>，即可改选。</li>
     </ul>
 
     <h2 id="test"><a class="anchor" href="#test">测试</a></h2>
@@ -581,7 +584,7 @@ m plugin logout acme</pre>
   <span class="s">"summary"</span>: { <span class="s">"en"</span>: <span class="s">"Your Acme Coding Plan."</span>, <span class="s">"zh"</span>: <span class="s">"使用你的 Acme Coding Plan。"</span> } }</pre>
         </div>
         中间件的条目写 <code>"kind": "middleware"</code>，不写 <code>providers</code>，列在<span class="ui">网关中间件</span>下。<code>MAGPIE_PLUGIN_MARKET=&lt;url&gt;</code> 让 magpie 改用另一份列表，可以用来检查你的条目；设为 <code>off</code> 则只用内置副本。</li>
-      <li><b>GitHub 标签。</b>在 GitHub 上打了 <code>magpie-plugin</code> topic 的仓库，会显示在 <span class="ui">插件 → 发现 → 非官方插件 · GitHub</span> 里，Star 多的在前，并标明没有人审阅过。<code>package.json</code> 要放在仓库根目录。发布到 npm 且 <code>repository</code> 指向这个仓库的，从 npm 安装；否则按仓库当前的代码安装，所以它加载的文件必须提交进仓库：<code>dist</code> 只在发布时才构建的仓库不会显示。fork、已归档的仓库和 magpie-community 自己的仓库也不显示。magpie 最多每六小时问一次 GitHub。</li>
+      <li><b>GitHub 标签。</b>在 GitHub 上打了 <code>magpie-plugin</code> topic 的仓库，会显示在 <span class="ui">插件 → 发现 → 非官方插件 · GitHub</span> 里，Star 多的在前，并标明没有人审阅过。<code>package.json</code> 要放在仓库根目录。发布到 npm 且 <code>repository</code> 指向这个仓库的，从 npm 安装；否则按仓库当前的代码安装，所以它加载的文件必须提交进仓库：<code>dist</code> 只在发布时才构建的仓库不会显示。fork、已归档的仓库和 magpie-community 自己的仓库也不显示。magpie 最多每十分钟问一次 GitHub，仓库打上标签后几分钟内就会出现。卡片显示 <code>package.json</code> 里 <code>"magpie": { "icon": "…" }</code> 给的图标，没有就显示拼图图标。</li>
       <li><b>社区包。</b>想把插件贡献到 <a href="https://github.com/magpie-community/plugins">magpie-community/plugins</a>：
         <ul>
           <li>放在 <code>packages/&lt;name&gt;</code> 下，包名为 <code>@magpie-community/opencode-&lt;name&gt;-auth</code>（供应商）或 <code>@magpie-community/middleware-&lt;name&gt;</code>（中间件），除非确实需要，不要有运行时依赖。</li>
@@ -708,6 +711,8 @@ magpie plugin options model-map '{"mapping": {"fast": "deepseek/deepseek-chat"}}
     <a href="/zh/">首页</a>
     <a href="/docs/zh/intent">意图路由</a>
     <a href="/docs/zh/plugins">插件开发</a>
+    <a href="/docs/zh/remote">远程 magpie</a>
+    <a href="/docs/zh/docker">Docker</a>
     <a href="/docs/zh/import">Add to magpie</a>
     <a href="/docs/zh/integrate">接入应用</a>
     <a href="https://github.com/yetone/magpie">GitHub</a>

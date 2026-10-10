@@ -102,6 +102,7 @@ func load() (*Library, error) {
 	if l.Applied == nil {
 		l.Applied = map[string]*Applied{}
 	}
+	l.heal() // magpie's own servers run this computer's magpie (self_here.go)
 	return l, nil
 }
 
@@ -113,6 +114,15 @@ func (l *Library) save() error {
 		sort.Strings(a.MCP)
 		sort.Strings(a.Skills)
 	}
+	// a skill or server on no agent is on none, [] not null: a list sorted
+	// with slices.Sorted, or cloned, from an empty one is nil (#1217)
+	for _, s := range l.Skills {
+		s.Agents = orNone(s.Agents)
+	}
+	for _, s := range l.MCP {
+		s.Agents = orNone(s.Agents)
+	}
+	l.Instructions.Agents = orNone(l.Instructions.Agents)
 	b, err := json.MarshalIndent(l, "", "  ")
 	if err != nil {
 		return err
@@ -201,6 +211,7 @@ func change(f func(l *Library) error) (*Result, error) {
 	if err := f(l); err != nil {
 		return nil, err
 	}
+	l.heal() // a server f brought in, from another computer too
 	if err := l.save(); err != nil {
 		return nil, err
 	}

@@ -150,9 +150,12 @@ func DesktopID(e provider.Entry) string { return claudeLooking(e) }
 // picked for it (provider.CatalogFor, the Agents page's model list) by an id
 // it keeps (claudeLooking), named by its own name alone (蓝猫: "DeepSeek
 // V4.1 Flash", not with its provider's beside it). Desktop shows the name,
-// not the id, and its description after it, so none is given; it folds rows
+// not the id, and its description after it, so none is given but a 1M
+// entry's (desktop1M); it folds rows
 // of one name into one entry, so two models of one name keep their
-// provider's after it (desktopNames).
+// provider's after it (desktopNames). A model of 1M or more is listed by
+// its "[1m]" id under settings.DesktopLongest, described as Desktop's own
+// 1M entry is (desktop1M).
 func desktopModels(entries []provider.Entry) []map[string]any {
 	names := desktopNames(entries)
 	// the tier each model stands in for: the user's pick (a model picked
@@ -165,11 +168,16 @@ func desktopModels(entries []provider.Entry) []map[string]any {
 			tierOf[id] = t
 		}
 	}
+	longest := settings.Load().DesktopLongest
 	data := make([]map[string]any, 0, len(entries))
 	for i, e := range entries {
 		m := modelObject(e)
 		m["display_name"] = names[i]
 		m["id"] = claudeLooking(e)
+		if desktopListed1M(e, longest) {
+			m["id"] = m["id"].(string) + "[1m]"
+			m["description"] = desktop1MSaid
+		}
 		if t := tierOf[e.ID]; t != "" {
 			m["anthropic_family_tier"], m["is_family_default"] = t, true
 		} else if t := claudeTier(e.ID); t != "" && picked[t] == "" {
@@ -179,6 +187,39 @@ func desktopModels(entries []provider.Entry) []map[string]any {
 	}
 	return data
 }
+
+// desktop1M is the max_input_tokens from which Claude Desktop adds a 1M
+// entry beside a gateway model whose id has no "[1m]" (the discovery in its
+// app.asar, 2.7032: supports_1m when given, else max_input_tokens >= 1e6;
+// one whose id has "[1m]" gets none). Under settings.DesktopLongest such a
+// model is listed by that 1M id alone (#1272), which magpie serves as the
+// plain one (aliased, provider.Resolve take "[1m]" off), so a session
+// saved on the plain id still runs.
+//
+// Desktop says which entry is the 1M one only on the entry it adds: its
+// description is "1M context window" (WLt in JLt, 2.7032). A row of
+// magpie's whose id has "[1m]" gets nothing of that (PIt gives supports1m
+// to a bare id alone, and OIt folds a "[1m]" row only into a bare one
+// beside it), so it was shown as the plain model, by name alone, and the
+// switch read as doing the reverse of what it says (杰多夫 on Discord).
+// The row is described as Desktop describes its own 1M entry
+// (desktop1MSaid); its id, which Desktop hands Claude Code, has the "[1m]"
+// that gives a session the 1M window.
+const desktop1M = 1_000_000
+
+// desktopListed1M says e is listed to Claude Desktop by its "[1m]" id,
+// longest being settings.DesktopLongest.
+func desktopListed1M(e provider.Entry, longest bool) bool { return longest && e.Context >= desktop1M }
+
+// DesktopListed1M says Claude Desktop is shown e by its "[1m]" id, which
+// its Code tab hands Claude Code, so a session on it has the 1M window.
+func DesktopListed1M(e provider.Entry) bool {
+	return desktopListed1M(e, settings.Load().DesktopLongest)
+}
+
+// desktop1MSaid is the description Claude Desktop gives the 1M entry it
+// adds (WLt in its app.asar, 2.7032).
+const desktop1MSaid = "1M context window"
 
 // Claude Desktop's Code tab runs Claude Code with ANTHROPIC_DEFAULT_<TIER>_MODEL
 // set to "" for every tier, unless the gateway's /v1/models tags a model

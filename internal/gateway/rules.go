@@ -9,6 +9,7 @@ package gateway
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -589,4 +590,18 @@ func anyImageInput(a, b *bool) *bool {
 		return a
 	}
 	return nil
+}
+
+// pausedError tells an agent that every model of the group it asked for
+// is paused now, by which rules and when.
+func pausedError(asked string, paused []provider.Paused) string {
+	var bits []string
+	for _, p := range paused {
+		by := fmt.Sprintf("rule %d", p.Rule)
+		if p.Group != "" {
+			by = fmt.Sprintf("rule %d of %s", p.Rule, p.Group)
+		}
+		bits = append(bits, fmt.Sprintf("%s (%s: %s)", p.Member, by, strings.Join(p.When, " · ")))
+	}
+	return fmt.Sprintf("every model of %s is paused now by its rules: %s; change the rules on Magpie's Routing page, or ask again when they end", asked, strings.Join(bits, ", "))
 }

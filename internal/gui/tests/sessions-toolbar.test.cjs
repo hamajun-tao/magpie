@@ -71,7 +71,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await filter.fill("Fix the session toolbar");
         assert.equal(await view.locator(".row.sm-sess").count(), 1, "search still filters the current agent's sessions");
         await filter.press("Escape");
-        assert.equal(await view.locator(".row.sm-sess").count(), 426, "Escape clears the session search");
+        assert.equal(await view.locator(".row.sm-sess").count(), 100, "Escape clears the session search, back to the folder's first page");
         await filter.evaluate((e) => e.blur());
         for (const width of [1800, 900, 660, 320]) {
           await page.setViewportSize({ width, height: 560 });

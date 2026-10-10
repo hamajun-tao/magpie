@@ -188,7 +188,7 @@ func (m model) updateProviders(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.flash, m.flashOK = "testing "+p.Name+"…", true
 		return m, testCmd(p)
 	case "m":
-		// the vendor's list asked again, as the app editor's Refresh does
+		// the vendor's list asked again, as the app editor's Fetch models does
 		m.flash, m.flashOK = "asking "+p.Name+" for its models…", true
 		return m, refetchCmd(p.ID)
 	case "d":
@@ -240,7 +240,7 @@ func saveProvider(id string, change func(*provider.Provider), done string) tea.C
 
 // refetchCmd asks the provider's vendor for its model list again and says
 // how many it has and how many agents are offered, or why there is none:
-// the app editor's Refresh, which the TUI had no way to do (akic404 on
+// the app editor's Fetch models, which the TUI had no way to do (akic404 on
 // Discord: a provider added here had 0 models and nothing to fetch them).
 func refetchCmd(id string) tea.Cmd {
 	return func() tea.Msg {
@@ -402,6 +402,15 @@ func (m *model) openProviderModels(id string) {
 // openPresets picks a vendor magpie knows, then asks for its key.
 func (m *model) openPresets() {
 	var items []agent.Option
+	var shown []string
+	for _, d := range provider.Partners() {
+		items = append(items, agent.Option{Value: d.ID, Note: d.Name + " · partner (sponsor)"})
+		shown = append(shown, d.ID)
+	}
+	go func() {
+		provider.CountPartner(provider.PartnerShown, shown...)
+		provider.NoticePartners(shown...)
+	}()
 	for _, d := range provider.Presets() {
 		items = append(items, agent.Option{Value: d.ID, Note: d.Name + " · " + string(d.Kind)})
 	}
@@ -462,7 +471,7 @@ func addKeyAsk(p provider.Provider) ask {
 				// (akic404 on Discord)
 				text := "added " + saved.Name
 				ms, err := saved.Fetch(ctx)
-				if err != nil && saved.Decides() {
+				if err != nil && saved.DecideOnly() {
 					// a System One API: its list isn't what it is for
 					return flashMsg{text: text, ok: true}
 				}

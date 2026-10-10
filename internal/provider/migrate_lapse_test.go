@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/plugin"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 // An account the vendor refused while it ran on the plugin goes back to
@@ -18,10 +19,7 @@ import (
 // (every real mover clears the mark there): the built-in had marked it
 // the same way, and it would show signed in until its next refusal.
 func TestMoveBackKeepsLapse(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	claudeHome(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Cleanup(plugin.Settle)
@@ -76,10 +74,7 @@ func TestMoveBackKeepsLapse(t *testing.T) {
 // on a refused model token) moves along marked, as the built-in would
 // have marked it on its own model read, and doesn't stop the move.
 func TestMoveRefusedWhileListing(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	claudeHome(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Cleanup(plugin.Settle)
@@ -123,10 +118,7 @@ func TestMoveRefusedWhileListing(t *testing.T) {
 // the whole move. A plugin failing an account for any other reason still
 // does (TestMove's r-dead).
 func TestMoveExpiredInWords(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	claudeHome(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Cleanup(plugin.Settle)

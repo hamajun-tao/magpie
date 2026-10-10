@@ -2,7 +2,7 @@
 // (freecss on Discord). GitHub and the edge cache are stood in for.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import worker from "./worker.js";
+import worker, { served, goTarget } from "./worker.js";
 
 const EN = "### Features\n\n- One thing (#1)\n\n### Install\n\nDownload it.";
 const ZH = "### 新功能\n\n- 一件事 (#1)";
@@ -52,8 +52,14 @@ const FEED = `<?xml version="1.0" encoding="UTF-8"?>
 &lt;/ul&gt;</content>
   </entry>
 </feed>`;
+// what the worker sent PostHog
+const captured = [];
 globalThis.fetch = async (u, init = {}) => {
   u = String(u);
+  if (u === "https://us.i.posthog.com/i/v0/e/") {
+    captured.push(JSON.parse(init.body));
+    return new Response("{}");
+  }
   if (u.startsWith("https://api.github.com/")) {
     seen.push(new Headers(init.headers));
     if (apiDown) return new Response('{"message":"API rate limit exceeded"}', { status: 403 });
@@ -269,4 +275,121 @@ test("docs: an English docs page sends a browser that prefers Chinese or Japanes
   // a language's own page is never moved
   const res = await worker.fetch(new Request("https://usemagpie.ai/docs/zh/start", { headers: { Cookie: "lang=en" } }), env, ctx);
   assert.equal(res.status, 200);
+});
+
+// /api/partners is partners.js, cached ten minutes; every entry keeps the
+// rules the app checks (internal/provider/partners.go), so none is dropped
+// there unseen.
+test("partners", async () => {
+  const { PARTNERS } = await import("./partners.js");
+  const res = await ask("/api/partners");
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("Cache-Control"), "public, max-age=600");
+  const { partners } = await res.json();
+  assert.deepEqual(partners, served(PARTNERS, Date.now()));
+  assert(partners.length <= 12);
+  const ids = new Set();
+  for (const p of PARTNERS) {
+    assert.match(p.id, /^[a-z0-9][a-z0-9-]{1,40}$/, p.id);
+    assert(!ids.has(p.id), p.id + " twice");
+    ids.add(p.id);
+    assert(p.name?.trim(), p.id + " has no name");
+    assert(p.chat || p.responses || p.anthropic || p.regions?.length, p.id + " has no endpoint");
+    const urls = [p.chat, p.responses, p.anthropic, p.website, p.keysUrl, p.iconUrl, ...(p.regions || []).flatMap((r) => [r.chat, r.responses, r.anthropic, r.keysUrl, r.website])];
+    for (const u of urls.filter(Boolean)) assert.equal(new URL(u).protocol, "https:", p.id + ": " + u);
+    for (const t of [p.from, p.until].filter(Boolean)) assert(!isNaN(Date.parse(t)), p.id + ": " + t);
+  }
+});
+
+// The website and key links the app gets go through /go, which counts the
+// click and sends the browser on; one whose term ended leaves the list but
+// its links, kept in the providers added from it, still go.
+const LIST = [
+  { id: "acme", name: "Acme", chat: "https://api.acme.example/v1", website: "https://acme.example/", keysUrl: "https://acme.example/keys", iconUrl: "https://acme.example/i.png",
+    regions: [{ id: "cn", name: "China", chat: "https://cn.acme.example/v1", keysUrl: "https://cn.acme.example/keys" }, { id: "us east", name: "US", chat: "https://us.acme.example/v1" }] },
+  { id: "plain", name: "Plain", chat: "https://api.plain.example/v1" },
+  { id: "gone", name: "Gone", chat: "https://api.gone.example/v1", keysUrl: "https://gone.example/keys", until: "2026-01-01T00:00:00Z" },
+];
+const NOW = Date.parse("2026-10-10T00:00:00Z");
+
+test("partners: links go through /go", () => {
+  const out = served(LIST, NOW);
+  assert.deepEqual(out.map((p) => p.id), ["acme", "plain"]);
+  const [acme, plain] = out;
+  assert.equal(acme.website, "https://usemagpie.ai/go/acme/site");
+  assert.equal(acme.keysUrl, "https://usemagpie.ai/go/acme/keys");
+  assert.equal(acme.iconUrl, LIST[0].iconUrl);
+  assert.equal(acme.chat, LIST[0].chat);
+  assert.equal(acme.regions[0].keysUrl, "https://usemagpie.ai/go/acme/keys/cn");
+  assert.equal(acme.regions[0].website, undefined);
+  assert.equal(acme.regions[1].keysUrl, undefined);
+  assert.deepEqual(plain, LIST[1]);
+  // partners.js itself is left as it is
+  assert.equal(LIST[0].keysUrl, "https://acme.example/keys");
+  assert.equal(served([{ ...LIST[0], until: "2026-10-10T00:00:01Z" }], NOW).length, 1);
+});
+
+test("partners: /go sends the browser on", () => {
+  assert.equal(goTarget(LIST, "acme", "keys"), "https://acme.example/keys");
+  assert.equal(goTarget(LIST, "acme", "site"), "https://acme.example/");
+  assert.equal(goTarget(LIST, "acme", "keys", "cn"), "https://cn.acme.example/keys");
+  // a region without its own page has the partner's
+  assert.equal(goTarget(LIST, "acme", "keys", "us east"), "https://acme.example/keys");
+  assert.equal(goTarget(LIST, "acme", "site", "cn"), "https://acme.example/");
+  // ended, still goes
+  assert.equal(goTarget(LIST, "gone", "keys"), "https://gone.example/keys");
+  for (const [id, what, region] of [["nobody", "keys"], ["acme", "chat"], ["acme", "keys", "mars"], ["plain", "keys"], ["acme", "constructor"]])
+    assert.equal(goTarget(LIST, id, what, region), "", [id, what, region].join(" "));
+});
+
+test("partners: /go counts the click", async () => {
+  const { PARTNERS } = await import("./partners.js");
+  const p = PARTNERS.find((x) => x.keysUrl || x.website);
+  if (!p) {
+    // nobody listed: every /go is not found, and nothing is sent
+    captured.length = 0;
+    for (const path of ["/go/acme/keys", "/go/%E0/keys", "/go/"]) assert.equal((await ask(path)).status, 404, path);
+    assert.deepEqual(captured, []);
+    return;
+  }
+  const what = p.keysUrl ? "keys" : "site";
+  captured.length = 0;
+  const res = await worker.fetch(new Request("https://usemagpie.ai/go/" + p.id + "/" + what), {}, ctx);
+  assert.equal(res.status, 302);
+  assert.equal(res.headers.get("Location"), p.keysUrl || p.website);
+  await Promise.resolve();
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].event, "magpie partner go");
+  assert.equal(captured[0].properties.id, p.id);
+  assert.equal(captured[0].properties.what, what);
+  assert.equal(captured[0].properties.$process_person_profile, false);
+  // a HEAD goes on but isn't counted
+  captured.length = 0;
+  const head = await worker.fetch(new Request("https://usemagpie.ai/go/" + p.id + "/" + what, { method: "HEAD" }), {}, ctx);
+  assert.equal(head.status, 302);
+  assert.deepEqual(captured, []);
+  assert.equal((await ask("/go/nobody-at-all/keys")).status, 404);
+  assert.equal((await ask("/go/%E0/keys")).status, 404);
+});
+
+test("partners: the list's fetches are counted, one in ten", async () => {
+  const { PARTNERS } = await import("./partners.js");
+  const anyLive = PARTNERS.some((p) => (!p.from || Date.parse(p.from) <= Date.now()) && (!p.until || Date.now() < Date.parse(p.until)));
+  const random = Math.random;
+  try {
+    for (const [r, sent] of [[0.05, anyLive], [0.5, false]]) {
+      Math.random = () => r;
+      captured.length = 0;
+      const res = await ask("/api/partners");
+      assert.equal(res.status, 200);
+      await new Promise((ok) => setTimeout(ok, 0));
+      assert.equal(captured.length, sent ? 1 : 0, "random " + r);
+      if (sent) {
+        assert.equal(captured[0].event, "magpie partners fetch");
+        assert.equal(captured[0].properties.weight, 10);
+      }
+    }
+  } finally {
+    Math.random = random;
+  }
 });

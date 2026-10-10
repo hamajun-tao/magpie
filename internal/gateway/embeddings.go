@@ -46,9 +46,9 @@ func (s *Server) retrieve(path, operation string) http.HandlerFunc {
 		who := callerOf(r)
 		call := Call{Time: start, From: provider.Chat, Agent: who.agent, Via: who.via, Model: asked}
 		usage.Saw(agentOf(r))
-		p, model, ok := provider.Resolve(asked)
+		p, model, ok := resolveRetrievalModel(asked)
 		if !ok {
-			msg := fmt.Sprintf("magpie knows no model %q", asked)
+			msg := unknownModel(asked, "")
 			if off, isOff := provider.SwitchedOff(asked); isOff {
 				msg = switchedOff(off, asked)
 			}
@@ -64,6 +64,19 @@ func (s *Server) retrieve(path, operation string) http.HandlerFunc {
 			writeError(w, provider.Chat, 403, msg)
 			s.record(call)
 			return
+		}
+		if isGroup {
+			// a model a pause rule holds for now is left out, as for a chat
+			var paused []provider.Paused
+			if ms, paused = provider.PausedOut(g.Live(), ms, agentOf(r), ruleClock()); len(ms) == 0 && len(paused) > 0 {
+				msg := pausedError(asked, paused)
+				call.Status, call.Error = 503, msg
+				writeError(w, provider.Chat, 503, msg)
+				s.record(call)
+				return
+			} else if len(paused) > 0 {
+				p, model = ms[0].Provider, ms[0].Model // not the paused one, when planning finds none
+			}
 		}
 		call.To = provider.Chat
 		// a routing group's members are tried as its routing orders them,
@@ -155,10 +168,33 @@ func (s *Server) retrieve(path, operation string) http.HandlerFunc {
 	}
 }
 
+// resolveRetrievalModel also finds a preset plan's embedding model by its
+// bare id. Such models stay out of agents' chat-model lists, so the general
+// resolver does not otherwise see them there.
+func resolveRetrievalModel(id string) (provider.Provider, string, bool) {
+	if p, model, ok := provider.Resolve(id); ok {
+		return p, model, true
+	}
+	if strings.Contains(id, "/") {
+		return provider.Provider{}, "", false
+	}
+	for _, p := range provider.All() {
+		if !p.On() || p.DecideOnly() {
+			continue
+		}
+		for _, m := range p.PlanEmbeddings() {
+			if m.ID == id {
+				return p, id, true
+			}
+		}
+	}
+	return provider.Provider{}, "", false
+}
+
 // retrieveFrom posts body to url as the provider signs its requests, and
 // reads the answer; a failure's code is the vendor's, with its message.
 func (s *Server) retrieveFrom(ctx context.Context, p provider.Provider, url string, body []byte) ([]byte, int, error) {
-	ctx = p.Via(ctx)
+	ctx = s.metered(p.Via(ctx), p, "") // counted against its MaxRPM (rpm.go)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, 500, err
@@ -166,6 +202,7 @@ func (s *Server) retrieveFrom(ctx context.Context, p provider.Provider, url stri
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	if p.IsRemoteMagpie() {
+		req.Header.Set("User-Agent", "magpie/"+Version)
 		passOnCaller(ctx, req)
 	}
 	if err := p.Sign(ctx, req, provider.Chat, body); err != nil {

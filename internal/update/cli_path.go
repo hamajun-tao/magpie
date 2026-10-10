@@ -175,6 +175,10 @@ func AddCLI(shell string) (*CLI, error) {
 	return ReadCLI(), nil
 }
 
+// Program is this magpie by a path that stays put: what a link, or an
+// agent's config that starts magpie, should name (cliProgram).
+func Program() (string, error) { return cliProgram() }
+
 // cliProgram is the program a link should point at: the running one, or
 // what stays put when it is replaced — Homebrew's opt link for a Cellar
 // build, the AppImage for one run from its mount.

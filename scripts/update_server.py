@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import signal
 import shutil
 import subprocess
 import sys
@@ -23,7 +24,7 @@ ENVFILE = Path('/etc/magpie.env')
 UNITFILE = Path('/etc/systemd/system/magpie.service')
 ACCESSFILE = Path('/root/magpie-access.txt')
 USER = 'magpie-build'
-GO = ROOT / 'tools/go1.26.3/bin/go'
+GO = ROOT / 'tools/go1.26.9/bin/go'
 BUN = ROOT / 'tools/bun-linux-x64-baseline/bun'
 REPOSITORY = 'https://github.com/hamajun-tao/magpie.git'
 
@@ -50,6 +51,59 @@ def switch_release(release):
 
 def service(action):
     subprocess.run(['systemctl', action, 'magpie.service'], check=True, timeout=60)
+
+
+def stop_check(process):
+    """Stop this check's descendants, including browsers with their own session."""
+    try:
+        os.killpg(process.pid, signal.SIGSTOP)
+    except ProcessLookupError:
+        return
+    handles = []
+
+    def freeze(pid, parent=None):
+        try:
+            handle = os.pidfd_open(pid)
+        except ProcessLookupError:
+            return
+        handles.append(handle)
+        try:
+            directory = Path('/proc') / str(pid)
+            if parent is not None:
+                status = directory.joinpath('status').read_text().splitlines()
+                actual_parent = next(int(line.split()[1]) for line in status if line.startswith('PPid:'))
+                if actual_parent != parent:
+                    # An exited child may already have yielded its PID to another process.
+                    handles.pop()
+                    os.close(handle)
+                    return
+            signal.pidfd_send_signal(handle, signal.SIGSTOP)
+            # Freeze each parent before reading all threads' children, preventing new browsers.
+            children = set()
+            for task in directory.joinpath('task').iterdir():
+                try:
+                    children.update(map(int, task.joinpath('children').read_text().split()))
+                except FileNotFoundError:
+                    pass
+            for child in children:
+                freeze(child, pid)
+        except (ProcessLookupError, FileNotFoundError):
+            pass
+
+    try:
+        freeze(process.pid)
+    finally:
+        for handle in reversed(handles):
+            try:
+                signal.pidfd_send_signal(handle, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            finally:
+                os.close(handle)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def request(opener, url, token=None):
@@ -162,7 +216,17 @@ def deploy(release, report):
         private_json(ROOT / 'last-update.json', report)
     except BaseException:
         if stopped:
-            service('stop')
+            try:
+                service('stop')
+            except Exception as stop_error:
+                # Before the snapshot, neither the running release nor its
+                # state has changed. Recover it even if stopping failed twice.
+                if snapshot:
+                    state = subprocess.run(
+                        ['systemctl', 'show', '--property=ActiveState', '--value', 'magpie.service'],
+                        check=True, text=True, capture_output=True, timeout=10)
+                    if state.stdout.strip() not in ('inactive', 'failed'):
+                        raise RuntimeError('rollback stopped: new service is still running; backup retained') from stop_error
             switch_release(previous)
             if snapshot:
                 restore_state(backup)
@@ -197,15 +261,22 @@ class Update:
             'GIT_TERMINAL_PROMPT': '0', 'LANG': 'C.UTF-8',
         }
 
-    def build_user(self, args, cwd=None, extra=None, capture=False):
+    def build_user(self, args, cwd=None, extra=None, capture=False, timeout=1800):
         env = self.environment | (extra or {})
         command = ['runuser', '-u', USER, '--', 'env', '-i', *[k + '=' + v for k, v in env.items()], *map(str, args)]
         # Keep root's credential files private without changing executable modes in tests.
-        result = subprocess.run(command, cwd=cwd, text=True, timeout=1800, umask=0o022,
-                                stdout=subprocess.PIPE if capture else self.log, stderr=self.log)
-        if result.returncode:
+        with subprocess.Popen(command, cwd=cwd, text=True, umask=0o022, start_new_session=True,
+                              stdout=subprocess.PIPE if capture else self.log, stderr=self.log) as process:
+            try:
+                output, _ = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                # runuser's children otherwise outlive it and keep consuming the host.
+                stop_check(process)
+                process.communicate()
+                raise RuntimeError('check timed out; see ' + str(self.directory / 'update.log'))
+        if process.returncode:
             raise RuntimeError('check or merge failed; see ' + str(self.directory / 'update.log'))
-        return result.stdout.strip() if capture else None
+        return output.strip() if capture else None
 
     def source(self):
         repo = MAINT / 'repo'
@@ -229,9 +300,9 @@ class Update:
             raise RuntimeError('custom model checks are missing; refusing official-only deployment')
         return source
 
-    def check(self, name, args, source, extra=None):
+    def check(self, name, args, source, extra=None, timeout=1800):
         print(name + ' …', flush=True)
-        self.build_user(args, cwd=source, extra=extra)
+        self.build_user(args, cwd=source, extra=extra, timeout=timeout)
         self.report['checks'].append(name)
 
     def check_gui(self, source, current):
@@ -239,12 +310,15 @@ class Update:
                                    'internal/gui'], cwd=source, capture=True).splitlines()
         tests = {name for name in changed if name.startswith('internal/gui/tests/')
                  and name.endswith('.test.cjs') and (source / name).is_file()}
-        if any(name.startswith('internal/gui/assets/') for name in changed):
-            tests.update('internal/gui/tests/' + name + '.test.cjs' for name in ('gui-ja', 'gui-de'))
+        shared_assets = any(name.startswith('internal/gui/assets/') for name in changed)
+        if shared_assets:
+            tests.update(path.relative_to(source).as_posix()
+                         for path in (source / 'internal/gui/tests').glob('*.test.cjs'))
         if tests:
-            self.check('Changed GUI tests (Chromium and WebKit, including locales)',
-                       ['/usr/bin/node', '--test', '--test-concurrency=1', *sorted(tests)], source,
-                       {'NODE_PATH': str(MAINT / 'ui/node_modules')})
+            name = 'Full GUI suite' if shared_assets else 'Changed GUI tests'
+            self.check(name + ' (Chromium and WebKit, including locales)',
+                       ['/usr/bin/node', '--test', '--test-concurrency=2', *sorted(tests)], source,
+                       {'NODE_PATH': str(MAINT / 'ui/node_modules')}, timeout=14400)
 
     def run(self, check_only=False):
         source = self.source()
@@ -261,6 +335,8 @@ class Update:
                    './internal/provider', './internal/gateway', '-run', 'TestModelHealth|TestResponsesProbesUseArrayInput',
                    '-count=20', '-timeout=10m'], source)
         self.check('Go vet', [GO, 'vet', '-p', '2', '-tags', 'nogui', './...'], source)
+        self.check('Windows Go vet', [GO, 'vet', '-p', '2', './...'], source,
+                   {'GOOS': 'windows', 'GOARCH': 'amd64', 'CGO_ENABLED': '0'})
         self.check_gui(source, current)
         binary = self.directory / 'magpie'
         self.check('Linux build', [GO, 'build', '-p', '2', '-tags', 'nogui', '-ldflags',

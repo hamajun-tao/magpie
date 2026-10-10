@@ -54,6 +54,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const saved = [];
       await page.route("**/*", serve(lang, saved));
       await page.goto("http://magpie.test/?view=settings&tab=models");
+      // Boot state and the full settings response both render this row.
+      await page.waitForLoadState("networkidle");
       const row = page.locator("#replyList #memberModelRow");
       await row.waitFor();
       await row.scrollIntoViewIfNeeded();

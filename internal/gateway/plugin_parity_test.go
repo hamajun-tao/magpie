@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -15,16 +14,14 @@ import (
 
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 // movedFake is the fake plugin signed in as the built-in id it was moved
 // onto, its requests going to up.
 func movedFake(t *testing.T, id string, up http.Handler) {
 	t.Helper()
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	fresh(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Setenv("FAKE_ID", id)

@@ -166,6 +166,9 @@ type Trashed struct {
 	Deleted time.Time `json:"deleted"`
 	Size    int64     `json:"size"`
 	Items   []moved   `json:"items"`
+	// Gateway: a session seen only through magpie's gateway, whose items
+	// are the conversation text magpie recorded of it (gateway_delete.go)
+	Gateway bool `json:"gateway,omitempty"`
 }
 
 // moved is one file or folder of a session moved to the trash: where it
@@ -476,6 +479,10 @@ func Trash() []Trashed {
 		}
 		dir := filepath.Dir(p)
 		t.Key = filepath.Base(filepath.Dir(dir)) + "/" + filepath.Base(dir)
+		if t.Gateway {
+			// its text expires, or is cleared, while it waits here
+			t.Size = sizeOf(filepath.Join(dir, "files"))
+		}
 		out = append(out, t)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Deleted.After(out[j].Deleted) })
@@ -485,7 +492,7 @@ func Trash() []Trashed {
 // trashFolder is a trash key's folder, or "" for a key that isn't one.
 func trashFolder(key string) string {
 	agent, name, ok := strings.Cut(key, "/")
-	if !ok || !Deletable(agent) || name == "" || strings.ContainsAny(name, `/\`) || name == "." || name == ".." {
+	if !ok || (!Deletable(agent) && agent != gatewayTrash) || name == "" || strings.ContainsAny(name, `/\`) || name == "." || name == ".." {
 		return ""
 	}
 	return filepath.Join(TrashDir(), agent, name)
@@ -528,6 +535,23 @@ func Restore(key string) (Trashed, error) {
 	t.Key = key
 	mu.Lock()
 	defer mu.Unlock()
+	if isGatewayKey(key) {
+		// its items can only be this session's text folders in the store
+		for _, m := range t.Items {
+			if !t.Gateway || m.Name != filepath.Base(m.Name) || m.Name == "" || filepath.Base(m.From) != gatewayIdentity(t.Agent, t.ID) ||
+				filepath.Dir(filepath.Dir(m.From)) != gatewayDir() {
+				return Trashed{}, errors.New("the trash note is damaged")
+			}
+		}
+		if !t.Gateway {
+			return Trashed{}, errors.New("the trash note is damaged")
+		}
+		if err := restoreGateway(dir, t); err != nil {
+			return Trashed{}, err
+		}
+		os.RemoveAll(dir)
+		return t, nil
+	}
 	for _, m := range t.Items {
 		if _, err := os.Lstat(m.From); err == nil {
 			return Trashed{}, fmt.Errorf("%s is there again; nothing was restored", m.From)

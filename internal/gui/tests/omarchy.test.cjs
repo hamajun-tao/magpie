@@ -130,6 +130,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // this short window with a reader's wheel before testing a click.
         await page.locator("#view-settings").hover();
         await page.mouse.wheel(0, 260);
+        // Seeing the control doesn't mean the native wheel has finished.
+        await page.waitForTimeout(700);
         await page.waitForFunction(() => {
           const r = document.querySelector("#barIconSegs").getBoundingClientRect();
           const v = document.querySelector("#view-settings").getBoundingClientRect();

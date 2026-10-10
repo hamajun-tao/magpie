@@ -20,6 +20,7 @@ const pluginUsage = `usage: magpie plugin [list] [--json]
        magpie plugin update                        install the newest version of each
        magpie plugin on|off <name>                 turn one on or off
        magpie plugin options <name> [<json> | off] show or set what a plugin is handed (a middleware's ctx.options)
+       magpie plugin use <name> <provider>         have this plugin serve a provider another plugin signs in to as well
        magpie plugin login <provider> [<method>]   sign in to a provider a plugin adds
        magpie plugin logout <provider>             forget the sign-in
        magpie plugin move|migrate <subscription>   run a built-in subscription's accounts on its community plugin
@@ -97,6 +98,16 @@ func pluginCmd(args []string) error {
 			return errors.New(pluginUsage)
 		}
 		return pluginOptions(rest[0], rest[1:])
+	case "use", "prefer":
+		if len(rest) != 2 {
+			return errors.New(pluginUsage)
+		}
+		rest[0] = installedName(rest[0])
+		if err := plugin.Prefer(rest[0], rest[1]); err != nil {
+			return err
+		}
+		fmt.Println(green.Render("✓"), rest[0], "serves", rest[1])
+		return listPlugins(ctx, false)
 	case "login", "signin":
 		if len(rest) < 1 || len(rest) > 2 {
 			return errors.New(pluginUsage)
@@ -168,6 +179,7 @@ func listPlugins(ctx context.Context, asJSON bool) error {
 	for _, p := range loaded {
 		errs[p.Spec] = p.Error
 	}
+	clashes := plugin.Clashes(loaded)
 	ps, perr := plugin.Providers(ctx)
 	mws := middleware.States()
 	if asJSON {
@@ -219,6 +231,18 @@ func listPlugins(ctx context.Context, asJSON bool) error {
 			}
 			fmt.Printf("  %s %s  %s\n", provider.PluginID(p.ID), muted.Render("("+p.Name+", "+strconv.Itoa(len(p.Models))+" models)"), who)
 		}
+		// a provider another plugin signs in to as well: one of them runs
+		// it, and the other's is said, not left out
+		for _, c := range clashes[e.Spec] {
+			if e.Off || errs[e.Spec] != "" {
+				continue
+			}
+			if c.By == e.Spec {
+				fmt.Printf("  %s  %s\n", provider.PluginID(c.ID), muted.Render("also signed in to by "+strings.Join(c.With, ", ")+"; this one serves it"))
+				continue
+			}
+			fmt.Printf("  %s  %s\n", provider.PluginID(c.ID), amber.Render("served by "+c.By+", which signs in to it too · magpie plugin use "+e.Spec+" "+c.ID))
+		}
 	}
 	if lerr != nil {
 		return lerr
@@ -251,10 +275,15 @@ func installedName(name string) string {
 func pluginOptions(name string, set []string) error {
 	var e *plugin.Entry
 	ps := plugin.Load().Plugins
+	// the one added as name exactly, else the one of that package
 	for i, x := range ps {
-		if plugin.Name(x.Spec) == name || x.Spec == name {
+		if e == nil && x.Spec == name {
 			e = &ps[i]
-			break
+		}
+	}
+	for i, x := range ps {
+		if e == nil && plugin.Name(x.Spec) == name {
+			e = &ps[i]
 		}
 	}
 	// a short name, as the community's READMEs write it

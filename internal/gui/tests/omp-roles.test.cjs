@@ -58,7 +58,7 @@ function server(lang, sets) {
 // the words as i18n.js has them
 const W = {
   en: { follows: (l) => `${l}: same as model`, on: (l, m) => `${l}: ${m}`, same: "Same as model", subagents: "subagents", smol: "smol", slow: "slow" },
-  zh: { follows: (l) => `${l}：同主模型`, on: (l, m) => `${l}：${m}`, same: "同主模型", subagents: "子 agent", smol: "小模型", slow: "慢模型" },
+  zh: { follows: (l) => `${l}：同主模型`, on: (l, m) => `${l}：${m}`, same: "同主模型", subagents: "子代理", smol: "小模型", slow: "慢模型" },
 };
 
 const omp = '.row.agent[data-id="omp"]';

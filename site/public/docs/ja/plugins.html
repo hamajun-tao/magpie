@@ -46,6 +46,8 @@
     <a href="/docs/ja/start">はじめに</a>
     <a href="/docs/ja/intent">インテントルーティング</a>
     <a href="/docs/ja/plugins">プラグイン</a>
+    <a class="toc-only" href="/docs/ja/remote">リモート magpie</a>
+    <a class="toc-only" href="/docs/ja/docker">Docker</a>
     <a href="/docs/ja/import">magpie に追加</a>
     <a href="/docs/integrate">アプリ連携</a>
     <a href="https://github.com/yetone/magpie-releases/releases">リリース</a>
@@ -209,9 +211,9 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
       <li><b>プロキシ。</b>プラグインがプロバイダやアカウントのために行う fetch は、ユーザーがそのプロバイダやアカウントに設定したプロキシを経由します。設定がなければ magpie 自身のプロキシを経由します（設定が<em>直接接続</em>の場合を除く）。ループバックアドレスはプロキシを通りません。独自の <code>proxy</code> オプションを渡す fetch はそのままにされます。</li>
       <li><b>更新。</b>
         <ul>
-          <li>コミュニティのパッケージ（<code>@magpie-community/*</code>）は、magpie の起動から少し後に自動で更新され、その後は 6 時間ごとに更新されます。</li>
+          <li>コミュニティのパッケージ（<code>@magpie-community/*</code>）は、magpie の起動から少し後に自動で更新され、その後は 1 時間ごとに更新されます。</li>
           <li>そのほかのパッケージは、新しいバージョンがあると <span class="ui">プラグイン</span> にドットが表示され、ユーザーがクリックか <code>magpie plugin update</code> で更新します。</li>
-          <li>バージョンを固定した指定（<code>name@1.2.3</code>）はそのバージョンのままです。</li>
+          <li>バージョンを固定した指定（<code>name@1.2.3</code>）は、ユーザーが更新するまでそのバージョンのままです。<span class="ui">… にアップデート</span>、<span class="ui">すべてアップデート</span>、<code>magpie plugin update</code> は最新版をインストールし、固定を外します。</li>
         </ul></li>
     </ul>
     <p>magpie が設定フォルダ（<code>~/.config/magpie</code> または <code>$XDG_CONFIG_HOME/magpie</code>）に保存するもの：</p>
@@ -540,6 +542,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
       <li>エージェントはプラグインのモデルを <code>&lt;id&gt;/&lt;model&gt;</code> と呼びます。id はプラグインの <code>auth.provider</code> です。</li>
       <li>その id が magpie ですでに使われている場合（組み込みサブスクリプション、プリセット（<code>google</code>、<code>openai</code>、<code>anthropic</code>、…）、<code>magpie</code> 自身）、プラグインのプロバイダは <code>&lt;id&gt;-plugin</code> という名前になります。自分だけの id を選んでください。</li>
       <li>例外は、magpie の非推奨の組み込みサブスクリプション向けのコミュニティプラグインです。これらは組み込みの id（<code>cursor</code>、<code>zed</code>、…）を使い、ユーザーがプラグインに移行するとそれを引き継ぐので、エージェントは変更なしで動き続けます。</li>
+      <li>インストール済みの 2 つのプラグインが同じ id にサインインする場合（公開プラグインと自分のコピーなど）、提供するのは 1 つだけです。選んだ方、選んでいなければ後から追加した方です。どちらも <span class="ui">プラグイン → インストール済み</span> に残り、各行にどちらが提供しているかが表示されます。もう一方の行の <span class="ui">… に使う</span>、または <code>magpie plugin use &lt;名前&gt; &lt;id&gt;</code> で切り替えられます。</li>
     </ul>
 
     <h2 id="test"><a class="anchor" href="#test">テスト</a></h2>
@@ -581,7 +584,7 @@ m plugin logout acme</pre>
   <span class="s">"summary"</span>: { <span class="s">"en"</span>: <span class="s">"Your Acme Coding Plan."</span>, <span class="s">"zh"</span>: <span class="s">"使用你的 Acme Coding Plan。"</span> } }</pre>
         </div>
         ミドルウェアのエントリには <code>"kind": "middleware"</code> を書き、<code>providers</code> は書きません。<span class="ui">ゲートウェイミドルウェア</span> の下に表示されます。<code>MAGPIE_PLUGIN_MARKET=&lt;url&gt;</code> は magpie に別の一覧を参照させます（自分の一覧の確認に便利です）。<code>off</code> にすると内蔵のコピーだけを使います。</li>
-      <li><b>GitHub のトピック。</b>GitHub で <code>magpie-plugin</code> トピックを付けたリポジトリは、<span class="ui">プラグイン → 発見 → 非公式 · GitHub</span> に、スターの多い順に、誰もレビューしていないものとして表示されます。<code>package.json</code> はリポジトリのルートに置いてください。<code>repository</code> がそのリポジトリを指す形で npm に公開されていれば npm からインストールされ、そうでなければリポジトリの現在のコードがインストールされます。そのため読み込むファイルはコミットしておく必要があり、<code>dist</code> を公開時にしかビルドしないリポジトリは表示されません。フォーク、アーカイブ済みのリポジトリ、magpie-community 自身のものも表示されません。magpie が GitHub に問い合わせるのは最大で 6 時間に 1 回です。</li>
+      <li><b>GitHub のトピック。</b>GitHub で <code>magpie-plugin</code> トピックを付けたリポジトリは、<span class="ui">プラグイン → 発見 → 非公式 · GitHub</span> に、スターの多い順に、誰もレビューしていないものとして表示されます。<code>package.json</code> はリポジトリのルートに置いてください。<code>repository</code> がそのリポジトリを指す形で npm に公開されていれば npm からインストールされ、そうでなければリポジトリの現在のコードがインストールされます。そのため読み込むファイルはコミットしておく必要があり、<code>dist</code> を公開時にしかビルドしないリポジトリは表示されません。フォーク、アーカイブ済みのリポジトリ、magpie-community 自身のものも表示されません。magpie が GitHub に問い合わせるのは最大で 10 分に 1 回なので、トピックを付けたリポジトリは数分で表示されます。カードには <code>package.json</code> の <code>"magpie": { "icon": "…" }</code> で指定したアイコンが表示され、ない場合はパズルのアイコンになります。</li>
       <li><b>コミュニティのパッケージ。</b><a href="https://github.com/magpie-community/plugins">magpie-community/plugins</a> に貢献するには：
         <ul>
           <li><code>packages/&lt;name&gt;</code> に置き、名前はプロバイダなら <code>@magpie-community/opencode-&lt;name&gt;-auth</code>、ミドルウェアなら <code>@magpie-community/middleware-&lt;name&gt;</code> とします。本当に必要でない限り、ランタイムの依存は持たせないでください。</li>
@@ -708,6 +711,8 @@ magpie plugin options model-map '{"mapping": {"fast": "deepseek/deepseek-chat"}}
     <a href="/ja/">ホーム</a>
     <a href="/docs/ja/intent">インテントルーティング</a>
     <a href="/docs/ja/plugins">プラグイン</a>
+    <a href="/docs/ja/remote">リモート magpie</a>
+    <a href="/docs/ja/docker">Docker</a>
     <a href="/docs/ja/import">magpie に追加</a>
     <a href="/docs/integrate">アプリ連携</a>
     <a href="https://github.com/yetone/magpie">GitHub</a>

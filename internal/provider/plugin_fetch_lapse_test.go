@@ -3,23 +3,20 @@ package provider
 import (
 	"context"
 	"net/http"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/yetone/magpie/internal/plugin"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 // A plugin's fetch hook that throws on its sign-in (the vendor turned the
 // refresh away) marks the account lapsed, as a built-in's refused refresh
 // marked it; the other account is left alone.
 func TestPluginFetchSignInExpiredLapses(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	claudeHome(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Setenv("FAKE_BASE", "http://127.0.0.1:9/v1")

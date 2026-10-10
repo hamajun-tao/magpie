@@ -1,8 +1,9 @@
 // Package imagemcp is `magpie mcp image`: a stdio MCP server an agent is
 // given, when it is picked for it in the Library, to make images with the
-// model the Settings' Image generation names, and videos with a Grok
-// subscription. It asks the gateway, which knows the providers, and saves
-// what comes back in the project.
+// model the Settings' Image generation names, and videos with the first
+// video model the gateway has (gateway.AutoVideomaker). It asks the
+// gateway, which knows the providers, and saves what comes back in the
+// project.
 package imagemcp
 
 import (
@@ -64,8 +65,8 @@ var (
 
 var videoSchema = map[string]any{
 	"name": videoTool,
-	"description": "Generate a short video from a text prompt, optionally starting from an image to animate, with a Grok subscription signed in to Magpie " +
-		"(it has no other video model yet). It takes from ten seconds to a few minutes, then the video is saved as an mp4 file in the project (" + VideoFolder +
+	"description": "Generate a short video from a text prompt, optionally starting from an image to animate, with a video model set up in Magpie " +
+		"(a Grok subscription's Grok Imagine, Volcengine Ark Agent Plan's Seedance, another Magpie's, or a provider whose model list marks video models). It takes from ten seconds to a few minutes, then the video is saved as an mp4 file in the project (" + VideoFolder +
 		"/ unless path says where) and its path is returned; when it is not ready within about 20 seconds, the answer is an id to wait on with " + resultTool + " instead. Describe the subject, the motion and the camera: what moves, how, and what the shot is.",
 	"inputSchema": map[string]any{
 		"type": "object",

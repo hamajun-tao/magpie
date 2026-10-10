@@ -77,7 +77,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.match(await endpoint.locator("xpath=following-sibling::div[contains(@class,'hint')]").textContent(), w.hint);
         await page.waitForFunction(() => document.activeElement?.classList.contains("endpoint"));
         const key = ed.locator("input[type=password]").first();
-        const [ey, ky] = [await endpoint.boundingBox(), await key.boundingBox()].map((b) => b.y);
+        // Sample both fields in one frame while the editor opens.
+        const [ey, ky] = await ed.evaluate((e) => [e.querySelector("input.endpoint"), e.querySelector("input[type=password]")]
+          .map((input) => input.getBoundingClientRect().y));
         assert(ey < ky, "the endpoint above the key");
 
         // no endpoint: said, nothing sent, the page where it was

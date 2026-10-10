@@ -20,8 +20,9 @@ import (
 	"github.com/yetone/magpie/internal/usage"
 )
 
-// The gateway accepts named caller keys locally and, while shared, remotely.
-// Loopback clients may still use any token, including a stale named key.
+// The gateway accepts named caller keys locally and, while shared or on the
+// network, remotely. Loopback clients may still use any token, including a
+// stale named key.
 
 // listenAddr is where the gateway listens: every interface while it is
 // shared, on its port, else its address. A host MAGPIE_ADDR names itself
@@ -100,16 +101,20 @@ func publicURL() string {
 // PublicURL is MAGPIE_PUBLIC_URL, with a scheme; "" when it isn't set.
 func PublicURL() string { return publicURL() }
 
-// OpenToAnyone: the gateway listens beyond loopback (MAGPIE_ADDR) and isn't
-// shared, so anyone who reaches it is let in with any key. Shared, it asks
-// for an enabled gateway key instead.
-func OpenToAnyone() bool {
-	if settings.Load().LAN {
-		return false
-	}
+// OnNetwork: MAGPIE_ADDR puts the gateway beyond loopback (0.0.0.0 in the
+// Docker image, a server's or one interface's address), so it is reached
+// from other machines, and from a container's host, whether or not it is
+// shared from Settings. Such callers need an enabled gateway key, as they
+// do while it is shared: nothing that reaches it from elsewhere is let in
+// on any key.
+func OnNetwork() bool {
 	h, _, err := net.SplitHostPort(Addr())
 	return err == nil && h != "localhost" && !net.ParseIP(h).IsLoopback()
 }
+
+// remoteKeyed: requests from another machine are answered, with an enabled
+// gateway key — while the gateway is shared, or listens on the network.
+func remoteKeyed() bool { return settings.Load().LAN || OnNetwork() }
 
 // PublicHost is MAGPIE_PUBLIC_URL's host, "" when it isn't set.
 func PublicHost() string {
@@ -124,6 +129,10 @@ func PublicHost() string {
 // which other machines can't reach, and MAGPIE_PUBLIC_URL doesn't say the
 // host's.
 func ContainerAddrs() bool { return publicURL() == "" && inContainer("/") }
+
+// InContainer: this magpie runs in a container (Docker, Podman, a
+// Kubernetes pod), whose image is what gets updated, not its binary.
+func InContainer() bool { return inContainer("/") }
 
 // inContainer: the system under root is a container's — Docker's or
 // Podman's marker file, or a container runtime in PID 1's cgroup.
@@ -217,20 +226,15 @@ func (s *Server) Relisten() error {
 	return nil
 }
 
-// lanGuard requires a named caller key on the local network. An explicit
-// MAGPIE_ADDR without LAN sharing retains its existing open-gateway behavior.
+// lanGuard: a request from another machine — any peer that isn't
+// loopback, and a proxy's or tunnel's on loopback — needs an enabled gateway
+// key, and is answered at all only while the gateway is shared or listens on
+// the network (OnNetwork). Loopback clients may still use any token,
+// including a stale named key.
 func lanGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		remote := !local(r)
-		shared := settings.Load().LAN
-		// a gateway MAGPIE_ADDR opens to the network lets anyone in, through
-		// a proxy too; listening on loopback, it is reached from elsewhere
-		// only through one, and that stays closed unless shared
-		closed := os.Getenv("MAGPIE_ADDR") == ""
-		if proxied(r) {
-			closed = !OpenToAnyone()
-		}
-		if remote && !shared && closed {
+		if remote && !remoteKeyed() {
 			if proxied(r) {
 				log.Printf("refused %s %s through a proxy or tunnel: magpie isn't shared", r.Method, r.URL.Path)
 				http.Error(w, "this request came through a proxy or tunnel (it carries a forwarding header such as X-Forwarded-For or Cf-Connecting-IP), so magpie answers it as one from another machine: only while Settings → Share on local network is on, with an enabled gateway key (Gateway → Gateway keys) sent as Authorization: Bearer <key> or x-api-key", http.StatusForbidden)
@@ -239,13 +243,13 @@ func lanGuard(next http.Handler) http.Handler {
 			http.Error(w, "magpie isn't shared on the local network", http.StatusForbidden)
 			return
 		}
-		if (remote && shared) || (!remote && managedKey(r)) {
+		if remote || managedKey(r) {
 			var ok bool
 			r, ok = identifyCaller(w, r)
 			if !ok {
 				return
 			}
-			if remote && shared {
+			if remote {
 				r = r.WithContext(context.WithValue(r.Context(), lanKeyed{}, true))
 			}
 		}
@@ -256,7 +260,7 @@ func lanGuard(next http.Handler) http.Handler {
 // callerGuard also covers embedded handlers used by the web app and tests.
 func callerGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if access.Caller(r.Context()).KeyID == "" && managedKey(r) && (local(r) || settings.Load().LAN) {
+		if access.Caller(r.Context()).KeyID == "" && managedKey(r) && (local(r) || remoteKeyed()) {
 			var ok bool
 			r, ok = identifyCaller(w, r)
 			if !ok {
@@ -311,6 +315,9 @@ func accountOf(p provider.Provider) string {
 }
 
 func appendUsage(r *http.Request, rec usage.Record) {
+	if rec.Session == "" {
+		rec.Session = sessionOf(r.Header)
+	}
 	who := access.Caller(r.Context())
 	rec.CallerKeyID, rec.CallerKeyName = who.KeyID, who.KeyName
 	rec.Local = local(r)

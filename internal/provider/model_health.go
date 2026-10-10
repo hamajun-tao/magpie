@@ -142,8 +142,24 @@ func ConfigureModelHealth(c ModelHealthConfig) error {
 }
 
 func healthChecks(p Provider, model string) bool {
-	return p.Account == nil && !p.DecideOnly() && !p.DecidesModel(model) &&
-		(p.Chat != "" || p.Responses != "" || p.Anthropic != "") && !p.drawsOnImages(model)
+	if p.Account != nil || p.DecideOnly() || p.DecidesModel(model) || p.drawsOnImages(model) {
+		return false
+	}
+	// Retrieval models do not answer conversation probes. Include the upstream
+	// name so a user alias cannot turn one into a checked text model.
+	name := strings.ToLower(model + " " + UpstreamName(p, model))
+	if strings.Contains(name, "embed") || strings.Contains(name, "rerank") {
+		return false
+	}
+	apis := p.APIs(model)
+	for _, pr := range []Protocol{Chat, Responses, Anthropic} {
+		if p.Base(pr) != "" && (len(apis) == 0 || slices.Contains(apis, pr)) {
+			return true
+		}
+	}
+	// An explicit Gemini-only model on a mixed provider needs its own native
+	// probe; failing a Chat probe says nothing about its availability.
+	return false
 }
 
 func healthRecordID(p Provider, model string) string {

@@ -94,3 +94,60 @@ func TestPluginOwnIcon(t *testing.T) {
 		t.Errorf("fetched again: %d", fetched.Load())
 	}
 }
+
+// yetone: 非官方插件显示不出来 logo. A repository's https picture not fetched
+// before is waited for, so the GitHub list's first answer has it; one slower
+// than the wait shows the next time, and the wait ends when it does.
+func TestRepoIconsWaitForFirstFetch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+
+	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+	slow := make(chan struct{})
+	// the fetch left waiting ends with the test
+	t.Cleanup(func() {
+		close(slow)
+		for i := 0; i < 200; i++ {
+			plugIcons.Lock()
+			n := len(plugIcons.busy)
+			plugIcons.Unlock()
+			if n == 0 {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Error("the slow fetch didn't end")
+	})
+	was := fetchPluginIcon
+	t.Cleanup(func() { fetchPluginIcon = was })
+	fetchPluginIcon = func(ctx context.Context, u string) (string, error) {
+		if strings.Contains(u, "slow") {
+			select {
+			case <-slow:
+			case <-ctx.Done():
+			}
+			return "", ctx.Err()
+		}
+		time.Sleep(100 * time.Millisecond)
+		return StoreIcon(png)
+	}
+
+	data := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+	said := []string{"https://gaccode.example/favicon.png", "", data}
+	got := RepoIcons(said, 5*time.Second)
+	if !strings.HasPrefix(got[0], "file:") || got[1] != "" || !strings.HasPrefix(got[2], "file:") {
+		t.Fatalf("first answer = %q", got)
+	}
+
+	start := time.Now()
+	got = RepoIcons([]string{"https://slow.example/icon.png"}, 300*time.Millisecond)
+	if got[0] != "" {
+		t.Fatalf("a fetch never finished = %q", got[0])
+	}
+	if d := time.Since(start); d < 250*time.Millisecond || d > 3*time.Second {
+		t.Fatalf("waited %v for a 300ms wait", d)
+	}
+}

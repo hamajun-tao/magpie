@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/plugin"
+	"github.com/yetone/magpie/internal/testenv"
 	"github.com/yetone/magpie/internal/zed"
 )
 
@@ -77,10 +77,7 @@ func fakeSaved(t *testing.T) map[string]savedLogin {
 // Moved, the plugin has the accounts in the user's order; moved back, the
 // built-in has them again, fresh tokens and order included.
 func TestMoveToPlugin(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	claudeHome(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Cleanup(plugin.Settle)
@@ -128,7 +125,7 @@ func TestMoveToPlugin(t *testing.T) {
 	// an account the vendor refuses: nothing moves, and the other's token,
 	// spent by the plugin, comes back renewed
 	reset(fakeLogin("a@fake", "rot-a", false, true), fakeLogin("c@fake", "r-dead", false, true))
-	err = Move(ctx, "fakeco")
+	err := Move(ctx, "fakeco")
 	if err == nil || !strings.Contains(err.Error(), "c@fake") {
 		t.Fatalf("Move with a refused account = %v", err)
 	}
@@ -282,10 +279,7 @@ func TestMoveToPlugin(t *testing.T) {
 // A move cut short (magpie quit mid-way) is put back before it is tried
 // again, and a failed one waits before magpie tries it by itself again.
 func TestMoveCutShort(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	claudeHome(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Cleanup(plugin.Settle)
@@ -361,10 +355,7 @@ func mustPlugin(t *testing.T) plugin.Provider {
 // when it renewed one, the built-in's when that renewed it meanwhile (a
 // request went to it), none when neither did.
 func TestPutBackKeepsNewer(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	claudeHome(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Cleanup(plugin.Settle)
@@ -470,10 +461,7 @@ func TestKeepMovedCurrent(t *testing.T) {
 // the built-in back first: its accounts go back to it rather than out of
 // sight with the plugin.
 func TestReleasePlugin(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	for _, op := range []string{"off", "remove"} {
 		t.Run(op, func(t *testing.T) {
 			claudeHome(t)
@@ -502,6 +490,7 @@ func TestReleasePlugin(t *testing.T) {
 			if got := MovedOnto(abs); len(got) != 1 || got[0] != "fakeco" {
 				t.Fatalf("moved onto the plugin: %v", got)
 			}
+			var err error
 			if op == "off" {
 				err = SetPluginOff(ctx, abs, true)
 			} else {

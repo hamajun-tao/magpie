@@ -4,12 +4,15 @@
 package codexcat
 
 import (
+	"bytes"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -35,6 +38,25 @@ func DefaultEffort(e []string) string {
 		}
 	}
 	return e[0]
+}
+
+// TakesEffort is the effort Codex takes for the model id when none is set:
+// the default_reasoning_level of the entry it reads for it. Codex's own
+// model and a ChatGPT account's (codex/) keep their entry from Codex's
+// models_cache.json, so it is that entry's (gpt-6.1-sol: low); one of
+// magpie's other models takes the one Entries writes. "" when the model
+// has no levels, or Codex's entry names none.
+func TakesEffort(ms []catalog.Model, id string) string {
+	e := catalog.Efforts(ms, id)
+	if len(e) == 0 {
+		return ""
+	}
+	slug, chatgpt := strings.CutPrefix(id, "codex/")
+	if raw, ok := CacheEntries()[slug]; ok && (chatgpt || slug == id) {
+		d, _ := raw["default_reasoning_level"].(string)
+		return d
+	}
+	return DefaultEffort(e)
 }
 
 // Catalog renders models as a whole models.json.
@@ -100,12 +122,26 @@ type model struct {
 	// fails to load); later Codex ask for parallel calls whatever it
 	// says, so it says what they do.
 	Parallel bool `json:"supports_parallel_tool_calls"`
+	// Required by Codex before 0.145: without it the whole catalog fails
+	// to load ("missing field `supports_reasoning_summaries`", tried on
+	// 0.144.0), and it sends a request's reasoning parameters — the effort
+	// picked, and the summary it shows as the model's thinking — only for
+	// a model whose entry says true (codex-rs client.rs build_reasoning,
+	// until openai/codex#32206), so the user had to add it by hand
+	// (#1450). Later Codex send them always and ignore the field. True for
+	// a model with effort levels; a true the user put in for another stays
+	// (Keep).
+	Summaries bool `json:"supports_reasoning_summaries" keep:"true"`
 	// "v1" only with settings.CodexAgentsV1, on an OpenAI model's
 	// entry (see V1); "v2" on a model offering Ultra that no ChatGPT
 	// account answers for (catalog.Model.AgentsV2), as Codex's own
 	// entry for it says: Ultra hands work to Codex's agents in V2
 	// alone, and a magpie-served lead writes their tasks as text.
 	MultiAgent string `json:"multi_agent_version,omitempty"`
+	// the effort Codex's Ultra sends the model, as Codex's own entry
+	// for the same model says it (see agentsEffort); without it Codex
+	// sends max (#1108)
+	AgentsEffort string `json:"multi_agent_reasoning_effort,omitempty"`
 	// the model Codex's auto-review runs on, settings.CodexAutoReview
 	// (see AutoReview)
 	AutoReview string `json:"auto_review_model_override,omitempty"`
@@ -146,6 +182,8 @@ func Entries(ms []catalog.Model, after int) []any {
 		// GPT models
 		if slug, ok := strings.CutPrefix(m.ID, "codex/"); m.Fast || ok && strings.HasPrefix(slug, "gpt-") {
 			e.Tiers = append(e.Tiers, tier{ID: "priority", Name: "Fast", Description: "1.5x speed, increased usage"})
+		} else if m.OwnTier {
+			e.Tiers = ownTiers(own, m)
 		}
 		// an OpenAI model: a ChatGPT account's (codex/), or a group one is
 		// in (Fast, see provider.codexListed)
@@ -173,13 +211,160 @@ func Entries(ms []catalog.Model, after int) []any {
 		for _, ef := range m.Efforts {
 			e.Efforts = append(e.Efforts, level{Effort: ef})
 		}
+		e.AgentsEffort = agentsEffort(own, m)
 		if len(m.Efforts) > 0 {
 			d := DefaultEffort(m.Efforts)
 			e.DefaultEffort = &d
+			e.Summaries = true
 		}
 		entries = append(entries, &e)
 	}
 	return entries
+}
+
+// owned are the keys of an entry magpie writes, or leaves out on purpose:
+// every field of model, and the two ownEntry takes out of Codex's own.
+// keepTrue are those of them where a true the user set by hand stays over
+// magpie's false (keep:"true").
+var owned, keepTrue = func() (own, yes map[string]bool) {
+	own = map[string]bool{"availability_nux": true, "upgrade": true}
+	yes = map[string]bool{}
+	t := reflect.TypeFor[model]()
+	for i := range t.NumField() {
+		f := t.Field(i)
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "" {
+			continue
+		}
+		own[name] = true
+		if f.Tag.Get("keep") == "true" {
+			yes[name] = true
+		}
+	}
+	return own, yes
+}()
+
+// Keep is the catalog b, as Catalog renders it, with what the user added by
+// hand to the entries of cur, the catalog on disk magpie is about to write
+// over: a key of an entry of the same slug that magpie doesn't own, and a
+// true where magpie says false of a keepTrue key — supports_reasoning_
+// summaries, put in for Codex to send a model's effort and show its
+// thinking (#1450). Another key magpie writes takes magpie's value; the
+// entry of a model magpie no longer serves goes. b as it is when there is
+// nothing to keep, or cur isn't a catalog.
+func Keep(cur, b []byte) []byte {
+	type list struct {
+		Models []map[string]any `json:"models"`
+	}
+	read := func(raw []byte, l *list) error {
+		d := json.NewDecoder(bytes.NewReader(raw))
+		d.UseNumber()
+		return d.Decode(l)
+	}
+	var was list
+	if len(cur) == 0 || read(cur, &was) != nil {
+		return b
+	}
+	add := map[string]map[string]any{}
+	for _, e := range was.Models {
+		slug, _ := e["slug"].(string)
+		if slug == "" {
+			continue
+		}
+		for k, v := range e {
+			if !owned[k] || keepTrue[k] && v == true {
+				if add[slug] == nil {
+					add[slug] = map[string]any{}
+				}
+				add[slug][k] = v
+			}
+		}
+	}
+	if len(add) == 0 {
+		return b
+	}
+	var now list
+	if read(b, &now) != nil {
+		return b
+	}
+	kept := false
+	for _, e := range now.Models {
+		slug, _ := e["slug"].(string)
+		for k, v := range add[slug] {
+			if was, ok := e[k]; !ok || keepTrue[k] && was != true {
+				e[k], kept = v, true
+			}
+		}
+	}
+	if !kept {
+		return b
+	}
+	out, err := json.MarshalIndent(now, "", " ")
+	if err != nil {
+		return b
+	}
+	return out
+}
+
+// datedSuffix is a snapshot's date after a model's id (-2026-09-14,
+// -20260914).
+var datedSuffix = regexp.MustCompile(`-(\d{4}-\d{2}-\d{2}|\d{8})$`)
+
+// agentsEffort is the multi_agent_reasoning_effort of Codex's own entry for
+// the model a third-party one serves (s2a/gpt-6-astra, openai/gpt-6-astra on
+// a relay, a dated snapshot): Codex's Ultra sends that effort, and max when
+// an entry has none, so the same model under magpie's id would otherwise
+// run at max where OpenAI's runs at xhigh (#1108). Only a model offering
+// Ultra and the effort itself gets it; "" otherwise.
+func agentsEffort(own map[string]map[string]any, m catalog.Model) string {
+	if !slices.Contains(m.Efforts, "ultra") {
+		return ""
+	}
+	slug := strings.ToLower(m.ID)
+	if i := strings.LastIndex(slug, "/"); i >= 0 {
+		slug = slug[i+1:]
+	}
+	slug = datedSuffix.ReplaceAllString(slug, "")
+	ef, _ := own[slug]["multi_agent_reasoning_effort"].(string)
+	if ef == "" || !slices.Contains(m.Efforts, ef) {
+		return ""
+	}
+	return ef
+}
+
+// gptModel is an OpenAI model's id, as a relay may serve it: gpt-6-sol, o4.
+var gptModel = regexp.MustCompile(`^(gpt-|o\d)`)
+
+// ownTiers are the service tiers Codex's own entry gives the model a
+// provider the user added by its address serves (openai/gpt-6-sol on a
+// relay, a dated snapshot), Ultrafast among them where the entry has it;
+// Fast on another GPT model; none on any other.
+func ownTiers(own map[string]map[string]any, m catalog.Model) []tier {
+	slug := strings.ToLower(m.ID)
+	if i := strings.LastIndex(slug, "/"); i >= 0 {
+		slug = slug[i+1:]
+	}
+	slug = datedSuffix.ReplaceAllString(slug, "")
+	if raw, ok := own[slug]["service_tiers"].([]any); ok {
+		var ts []tier
+		for _, r := range raw {
+			t, _ := r.(map[string]any)
+			id, _ := t["id"].(string)
+			if id == "" {
+				continue
+			}
+			name, _ := t["name"].(string)
+			desc, _ := t["description"].(string)
+			ts = append(ts, tier{ID: id, Name: name, Description: desc})
+		}
+		if len(ts) > 0 {
+			return ts
+		}
+	}
+	if gptModel.MatchString(slug) {
+		return []tier{{ID: "priority", Name: "Fast", Description: "1.5x speed, increased usage"}}
+	}
+	return []tier{}
 }
 
 // Order ranks entries — Codex's own, as the backend gives them, and

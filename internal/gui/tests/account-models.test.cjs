@@ -105,13 +105,19 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     const chips = (page, id) => panel(page, id).locator(".mchip").evaluateAll((cs) => cs.map((c) => `${c.textContent}${c.classList.contains("on") ? "*" : ""}`));
     // what the page and its scrollers have scrolled
     const scrolled = (page) => page.evaluate(() => [window.scrollY, ...[...document.querySelectorAll("*")].filter((e) => e.scrollTop > 0).map((e) => `${e.className}:${e.scrollTop}`)].join(" "));
+    // A reduced-motion animation still needs a rendered frame to finish in
+    // WebKit. Measure the settled row, not content-in's 2px starting offset.
+    const painted = (page) => page.waitForFunction(() =>
+      document.querySelector(".dialog").getAnimations().every((a) => a.playState !== "running"));
     // a click that leaves the row where it was and scrolls nothing
     const still = async (page, id, b) => {
       await b.scrollIntoViewIfNeeded();
       await page.waitForTimeout(150);
+      await painted(page);
       const before = await row(page, id).evaluate((e) => Math.round(e.getBoundingClientRect().top)), sc = await scrolled(page);
       await b.click();
       await page.waitForTimeout(200);
+      await painted(page);
       assert.equal(await row(page, id).evaluate((e) => Math.round(e.getBoundingClientRect().top)), before, `${id}'s row moved`);
       assert.equal(await scrolled(page), sc, "a click scrolled");
     };

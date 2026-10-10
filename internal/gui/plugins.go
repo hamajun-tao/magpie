@@ -92,6 +92,17 @@ type pluginEntryJSON struct {
 	// whether that is all it has, no provider to sign in to
 	IsMiddleware   bool `json:"isMiddleware,omitempty"`
 	MiddlewareOnly bool `json:"middlewareOnly,omitempty"`
+	// Clashes are the providers it signs in to that another plugin signs
+	// in to as well (a plugin of the user's own beside a third party's):
+	// the host runs one plugin for each, and the row says which, with a
+	// way to pick this one
+	Clashes []pluginClashJSON `json:"clashes,omitempty"`
+}
+
+// pluginClashJSON is a provider two plugins sign in to, as a row says it.
+type pluginClashJSON struct {
+	plugin.Clash
+	Name string `json:"name"` // the provider's, as the plugin serving it names it
 }
 
 // autoUpdatedFor is how long a plugin's row says magpie updated it.
@@ -118,6 +129,8 @@ func pluginsState(ctx context.Context, w Windows) pluginsJSON {
 	l := plugin.Load()
 	errs := map[string]string{}
 	names := map[string][]string{}
+	clashes := map[string][]plugin.Clash{}
+	idName := map[string]string{}
 	if len(l.Plugins) > 0 && (plugin.Running() || plugin.HasBun()) {
 		loaded, err := plugin.Plugins(ctx)
 		if err != nil {
@@ -126,9 +139,11 @@ func pluginsState(ctx context.Context, w Windows) pluginsJSON {
 		for _, p := range loaded {
 			errs[p.Spec] = p.Error
 		}
+		clashes = plugin.Clashes(loaded)
 		if ps, err := plugin.Providers(ctx); err == nil {
 			for _, p := range ps {
 				names[p.Spec] = append(names[p.Spec], p.Name)
+				idName[p.ID] = p.Name
 			}
 		}
 	}
@@ -155,6 +170,13 @@ func pluginsState(ctx context.Context, w Windows) pluginsJSON {
 		if file, only := plugin.Middleware(plugin.Target(e.Spec)); file != "" {
 			j.IsMiddleware, j.MiddlewareOnly = true, only
 			j.OptionsExample = plugin.OptionsExample(plugin.Target(e.Spec))
+		}
+		for _, c := range clashes[e.Spec] {
+			n := idName[c.ID]
+			if n == "" {
+				n = c.ID
+			}
+			j.Clashes = append(j.Clashes, pluginClashJSON{Clash: c, Name: n})
 		}
 		j.Moved = provider.MovedOnto(e.Spec)
 		if j.Moved == nil {
@@ -256,7 +278,17 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 	// repositories on GitHub tagged magpie-plugin: nobody's list, shown
 	// apart as not reviewed, installed from the repository
 	mux.HandleFunc("GET /api/plugins/github", func(rw http.ResponseWriter, r *http.Request) {
-		writeJSON(rw, map[string]any{"repos": plugin.TaggedRepos(r.Context()), "topic": plugin.Topic})
+		// each one's own picture as the page can show it, kept here as an
+		// installed plugin's is (a data URI isn't sent on to the page)
+		repos := append([]plugin.Tagged(nil), plugin.TaggedRepos(r.Context())...)
+		said := make([]string, len(repos))
+		for i := range repos {
+			said[i] = repos[i].Icon
+		}
+		for i, ic := range provider.RepoIcons(said, 3*time.Second) {
+			repos[i].Icon = ic
+		}
+		writeJSON(rw, map[string]any{"repos": repos, "topic": plugin.Topic})
 	})
 	mux.HandleFunc("GET /api/plugins/npm", func(rw http.ResponseWriter, r *http.Request) {
 		names := []string{}
@@ -332,6 +364,8 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 			Spec    string
 			Off     bool
 			Options map[string]any
+			// prefer's: the provider id the plugin is to serve
+			Provider string
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&in); err != nil && err != io.EOF {
 			fail(rw, err)
@@ -354,6 +388,8 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 			err = provider.SetPluginOff(ctx, in.Spec, in.Off)
 		case "options":
 			err = plugin.SetOptions(in.Spec, in.Options)
+		case "prefer":
+			err = plugin.Prefer(in.Spec, in.Provider)
 		default:
 			http.NotFound(rw, r)
 			return

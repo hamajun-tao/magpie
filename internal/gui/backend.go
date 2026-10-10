@@ -40,6 +40,9 @@ func startBackend() (gw *gateway.Server) {
 	gateway.Window = true // the routing this process serves is shown on its page
 	gw = serveGateway()
 	go watchGateway(backendCtx, gatewayWatch)
+	// Codex's background app-server, restarted when it has the list from
+	// before a change and no codex session is on it (luci)
+	go agent.KeepCodexDaemonCurrent(backendCtx)
 	// Model lists are fetched, never compiled in: whatever the agents can see
 	// comes from the models.dev catalog plus each vendor's own /models answer.
 	// Keep both halves warm without making the user click anything.

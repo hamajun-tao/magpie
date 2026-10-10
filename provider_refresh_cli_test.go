@@ -13,7 +13,7 @@ import (
 )
 
 // magpie provider refresh <id> fetches a provider's list again, as the
-// app editor's Refresh does: a pick the new list no longer has is dropped
+// app editor's Fetch models does: a pick the new list no longer has is dropped
 // (akic404 on Discord: the TUI and CLI had no way to fetch a provider's
 // models after it was added).
 func TestProviderRefreshCmd(t *testing.T) {

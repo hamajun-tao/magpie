@@ -69,6 +69,8 @@ nav .wrap { display: flex; align-items: center; gap: 14px; height: 60px; }
 nav .links { display: flex; gap: 24px; margin-left: auto; margin-right: 10px; font-size: 14px; color: var(--ink2); }
 nav .links a { text-decoration: none; }
 nav .links a:hover { color: var(--ink); }
+/* listed in the contents (docs.js reads them from here) but kept out of the bar, which has no room */
+nav .links a.toc-only { display: none; }
 .icon-btn { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--ink2); cursor: pointer; padding: 0; flex: none; }
 .icon-btn:hover { color: var(--ink); }
 .icon-btn svg { width: 16px; height: 16px; }
@@ -129,7 +131,7 @@ article :not(pre) > code { font-size: .86em; background: var(--code); border: 1p
 .figure figcaption { font-size: 13px; color: var(--ink3); margin-top: 12px; text-align: center; }
 
 .steps { counter-reset: s; list-style: none; padding: 0 !important; display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
-.steps li { counter-increment: s; background: var(--card); margin: 0 !important; padding: 18px 20px 18px 60px; position: relative; }
+.steps li { counter-increment: s; background: var(--card); margin: 0 !important; padding: 18px 20px 18px 60px; position: relative; min-width: 0; }
 .steps li::before { content: counter(s); position: absolute; left: 20px; top: 18px; width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line); display: grid; place-items: center; font-size: 12.5px; font-weight: 600; color: var(--ink); }
 .steps li b { display: block; margin-bottom: 2px; }
 

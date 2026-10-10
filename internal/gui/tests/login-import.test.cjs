@@ -4,6 +4,9 @@
 // the accounts list and the wait on a browser sign-in both offer it, the box
 // says the file's sign-in is spent by the refresh, what is pasted is posted
 // as it is, and each account's outcome is listed; in English and Chinese.
+// #1453 (wlj521: Cockpit Tools' exports): the box names Cockpit Tools and
+// Sub2API, says the source tool is signed out, and a pasted text that held
+// no account is listed by name rather than passed over; at 380px too.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -41,6 +44,7 @@ function serve(lang, posted) {
         { user: "cpa@example.com", status: "added", plan: "pro" },
         { user: "live@example.com", status: "exists" },
         { user: "used@example.com", status: "failed", error: "ChatGPT didn't take the refresh token — it has been used since" },
+        { file: 1, status: "failed", error: "not JSON" },
       ] });
     }
     if (url.pathname.startsWith("/api/")) return json({});
@@ -51,8 +55,8 @@ function serve(lang, posted) {
 }
 
 const want = {
-  en: { imp: "Import accounts from a file…", instead: "Import from a file instead…", title: "Import ChatGPT accounts", intro: /CLIProxyAPI's auth files \(JSON\) or Codex's auth\.json/, spent: /spends the file's sign-in/, checking: "Checking the accounts with ChatGPT…", done: ["Added", "Already in magpie", "Not added"] },
-  zh: { imp: null, instead: null, title: null, intro: /CLIProxyAPI/, spent: /./, checking: null, done: null },
+  en: { imp: "Import accounts from a file…", instead: "Import from a file instead…", title: "Import ChatGPT accounts", intro: /Codex's auth\.json, or an export from Cockpit Tools, CLIProxyAPI or Sub2API/, spent: /signed out of that account.*only read/, checking: "Checking the accounts with ChatGPT…", done: ["Added", "Already in magpie", "Not added", "Not added"], pasted: "The pasted text" },
+  zh: { imp: null, instead: null, title: null, intro: /Cockpit Tools.*Sub2API/, spent: /退出该账号/, checking: null, done: null, pasted: "粘贴的内容" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -66,6 +70,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       page.on("pageerror", (e) => errors.push(e.message));
       const posted = [];
       await page.route("**/*", serve(lang, posted));
+      // the browser sign-in opens ChatGPT's page in a new window, and the real
+      // one is Cloudflare's challenge: in Chromium, while it runs, clicks on
+      // this page hung past their 5s (#1307). The window gets an empty page
+      await context.route((url) => url.hostname !== "magpie.test", (route) => route.fulfill({ contentType: "text/html", body: "" }));
       t.after(async () => {
         if (process.env.ARTIFACT_DIR) {
           await fs.mkdir(process.env.ARTIFACT_DIR, { recursive: true });
@@ -81,9 +89,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       if (lang === "zh") {
         // every new string has its Chinese
         for (const s of ["Import from a file instead…", "Checking the accounts with {vendor}…",
-          "Bring in accounts from CLIProxyAPI's auth files or {own}",
-          "Choose or paste CLIProxyAPI's auth files (JSON) or {own}. Each account's sign-in is refreshed with {vendor} before it is added.",
-          "Refreshing it spends the file's sign-in: the tool it came from will need to sign in again to use that account.",
+          "Bring in accounts from Codex's auth.json, or exports from Cockpit Tools, CLIProxyAPI or Sub2API",
+          "Choose or paste one or more files: Codex's auth.json, or an export from Cockpit Tools, CLIProxyAPI or Sub2API. Each account's sign-in is refreshed with ChatGPT before it is added.",
+          "This takes the sign-in over: the tool the file came from (Codex on another computer, Cockpit Tools, CLIProxyAPI) is signed out of that account and has to sign in again. The file itself is only read.",
+          "The pasted text",
           "Each account's sign-in is refreshed and its account looked up, as signing in does."]) {
           assert.notEqual(await T(s), s, "no Chinese for: " + s);
         }
@@ -100,7 +109,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await adds.nth(0).click();
       const instead = page.locator(".signing .acts button", { hasText: say.instead });
       await instead.waitFor();
-      assert.match(await instead.getAttribute("title"), /CLIProxyAPI/);
+      assert.match(await instead.getAttribute("title"), /Cockpit Tools/);
       await instead.click();
       const box = page.locator(".signing.import");
       await box.waitFor();
@@ -120,8 +129,20 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await page.locator(".signing.import .results").waitFor();
       assert.deepEqual(posted, [{ agent: "codex", files: [cpa] }]);
       const done = await page.locator(".signing.import .res .st").allTextContents();
-      assert.deepEqual(done, w.done || [await T("Added"), await T("Already in magpie"), await T("Not added")]);
-      assert.match(await page.locator(".signing.import .res.failed .why").textContent(), /used since/);
+      assert.deepEqual(done, w.done || [await T("Added"), await T("Already in magpie"), await T("Not added"), await T("Not added")]);
+      const failed = page.locator(".signing.import .res.failed");
+      assert.match(await failed.nth(0).locator(".why").textContent(), /used since/);
+      // a text that held no account is named, not a blank row
+      assert.equal(await failed.nth(1).locator(".u").textContent(), w.pasted);
+      assert.match(await failed.nth(1).locator(".why").textContent(), /not JSON/);
+      // at a narrow window the results fit, with no sideways scroll
+      await page.setViewportSize({ width: 380, height: 760 });
+      const wide = await page.evaluate(() => {
+        const box = document.querySelector(".signing.import");
+        return { page: document.documentElement.scrollWidth - document.documentElement.clientWidth, box: box.getBoundingClientRect().right - window.innerWidth };
+      });
+      assert.ok(wide.page <= 0 && wide.box <= 1, JSON.stringify(wide));
+      await page.setViewportSize({ width: 900, height: 760 });
       // the new account is listed
       await page.locator(".editor .accts .acc .n", { hasText: "cpa@example.com" }).waitFor();
       assert.deepEqual(errors, []);

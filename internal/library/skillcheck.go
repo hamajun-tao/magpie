@@ -84,6 +84,25 @@ func forgetCheck(name string) {
 	checks.Unlock()
 }
 
+// checkedAt is when the skills were last checked for updates (unix
+// nanoseconds), 0 before the first check since magpie started.
+var checkedAt atomic.Int64
+
+// checkEvery is how long the Library page goes before it checks for
+// updates by itself, as it opens the skills (#1449).
+const checkEvery = 12 * time.Hour
+
+// checkDue is whether the page should check the library's skills from
+// GitHub for updates: none checked since magpie started, or not for
+// checkEvery.
+func checkDue(l *Library) bool {
+	if !slices.ContainsFunc(l.Skills, func(s *Skill) bool { return s.Source != nil && s.Source.Kind == "github" }) {
+		return false
+	}
+	at := checkedAt.Load()
+	return at == 0 || time.Since(time.Unix(0, at)) >= checkEvery
+}
+
 // commit is one commit as GitHub's API lists it.
 type commit struct {
 	SHA    string `json:"sha"`
@@ -177,7 +196,11 @@ func apiGet(u string) ([]byte, int, bool, error) {
 
 // hashDir is a hash of a skill's files, their names and what's in them,
 // as copyDir copies them.
-func hashDir(dir string) string {
+func hashDir(dir string) string { return hashFiles(dir, false) }
+
+// hashFiles is hashDir, leaving aside the .DS_Store files Finder leaves in
+// a folder it shows when noFinder is set.
+func hashFiles(dir string, noFinder bool) string {
 	h := sha256.New()
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -193,7 +216,7 @@ func hashDir(dir string) string {
 		case d.Type()&fs.ModeSymlink != 0:
 			t, _ := os.Readlink(p)
 			fmt.Fprintf(h, "link %s %s\n", rel, filepath.ToSlash(t))
-		case d.Type().IsRegular() && rel != marker:
+		case d.Type().IsRegular() && rel != marker && !(noFinder && d.Name() == ".DS_Store"):
 			f, err := os.Open(p)
 			if err != nil {
 				return err
@@ -304,6 +327,7 @@ func CheckSkills() ([]SkillCheck, error) {
 		checks.m[c.Name] = c
 	}
 	checks.Unlock()
+	checkedAt.Store(time.Now().UnixNano())
 	if out == nil {
 		out = []SkillCheck{}
 	}

@@ -59,8 +59,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         page.on("pageerror", (e) => errors.push(e.message));
         await page.route("**/*", serve(lang));
         await page.goto("http://magpie.test/?view=providers");
+        await page.waitForLoadState("networkidle");
         await page.locator(".row.provider", { hasText: "Relay" }).first().click();
         await page.locator(".editor .accts.weighted .acc .key-weight").first().waitFor();
+        await page.waitForFunction(() => document.querySelector(".dialog")?.getAnimations().every((a) => a.playState !== "running"));
 
         for (const id of ["aaaaaaaaaa", "bbbbbbbbbb"]) {
           const m = await page.evaluate((id) => {
@@ -87,7 +89,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         }
         // hovered, Remove shows whole inside the card, and the name is still there
         await page.locator('.editor .acc[data-account-id="bbbbbbbbbb"] .key-weight').hover();
-        await page.waitForTimeout(250);
+        await page.waitForFunction(() => {
+          const row = document.querySelector('.editor .acc[data-account-id="bbbbbbbbbb"]');
+          return row?.matches(":hover") && getComputedStyle(row.querySelector(".text.quiet")).opacity === "1";
+        });
         const hov = await page.evaluate(() => {
           const row = document.querySelector('.editor .acc[data-account-id="bbbbbbbbbb"]');
           const box = row.closest(".accts").getBoundingClientRect();

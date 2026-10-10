@@ -78,10 +78,15 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.waitForTimeout(120);
         const before = await loc.evaluate((e) => e.getBoundingClientRect().top);
         const y = await page.evaluate(() => [scrollY, ...[...document.querySelectorAll("*")].filter((e) => e.scrollTop).map((e) => e.scrollTop)].join());
+        // A tick changes a chip's weight and can remove a line at the foot.
+        // Only that unavoidable clamp may change a scroller's position.
+        const scrollers = await page.evaluateHandle(() => ({ window: scrollY, elements: [...document.querySelectorAll("*")].filter((e) => e.scrollTop).map((e) => ({ e, top: e.scrollTop })) }));
         await loc.click();
         await page.waitForTimeout(200);
         if (await loc.count()) assert.equal(await loc.evaluate((e) => e.getBoundingClientRect().top), before, what + " moved");
-        assert.equal(await page.evaluate(() => [scrollY, ...[...document.querySelectorAll("*")].filter((e) => e.scrollTop).map((e) => e.scrollTop)].join()), y, what + " scrolled the page");
+        const expected = await scrollers.evaluate((saved) => [saved.window, ...saved.elements.map(({ e, top }) => Math.min(top, e.scrollHeight - e.clientHeight))].filter((top, i) => !i || top).join());
+        assert.equal(await page.evaluate(() => [scrollY, ...[...document.querySelectorAll("*")].filter((e) => e.scrollTop).map((e) => e.scrollTop)].join()), expected, what + " scrolled the page (before: " + y + ")");
+        await scrollers.dispose();
       };
 
       // no URL yet: nothing asked

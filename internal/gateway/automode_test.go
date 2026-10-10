@@ -9,9 +9,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -149,19 +151,69 @@ func TestAutoModeClassifierAnthropicVendor(t *testing.T) {
 	}
 }
 
+// Claude Code 2.1.295's ask for the review, as it sent it in auto mode
+// (paths shortened): the beta beside its others, and the safeguards with
+// their classifier_context, an object.
+const (
+	reviewBetas = "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24,dangerous-tool-use-2026-09-03,afk-mode-2026-01-31"
+	reviewAsked = `[{"type":"dangerous_tool_use","classifier_context":{"v":1,"permission_mode":"auto","platform":"macos","live_cwd":"/Users/lc/work","home_dir":"/Users/lc","rule_roots":{"userSettings":"/Users/lc/.claude","projectSettings":"/Users/lc/work"},"trusted_directories":{"primary":{"path":"/Users/lc/work","resolved":["/Users/lc/work"]},"additional":[],"network":[],"block_reads_outside_working_directories":false},"rules":{"allow":[],"deny":[],"ask":[]},"auto_mode":{"allow":[],"soft_deny":[],"hard_deny":[],"environment":[]},"restricted":false,"is_remote_mode":false,"user_identity":null,"git_state":{"cwd":"/Users/lc/work","root":null,"branch":null,"error":"not_a_repo"},"prior_turn_context":[{"tool_use_ids":["toolu_01Capture001"],"context":{"live_cwd":"/Users/lc/work","platform":"macos"}}]}}]`
+	// the verdict, as Claude Code 2.1.295 parses it
+	reviewed = `[{"type":"dangerous_tool_use","status":{"type":"available","tool_uses":{"toolu_01Abc":{"type":"evaluated","outcome":"not_flagged"}}}}]`
+)
+
+// reviewAsk is a turn of Claude Code's in auto mode, asking the review.
+func reviewAsk(model string) string {
+	return `{"model":"` + model + `","max_tokens":64000,"stream":true,
+	  "safeguards":` + reviewAsked + `,
+	  "tools":[{"name":"Bash","description":"Run a shell command","input_schema":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}],
+	  "messages":[{"role":"user","content":[{"type":"text","text":"Run the shell command: echo hi"}]}]}`
+}
+
+// reviewReply is a streamed call to Bash, with the review's verdict on it.
+func reviewReply(model string) string {
+	return sse(
+		`event: message_start`+"\n"+`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"`+model+`","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":7,"output_tokens":1}}}`,
+		`event: content_block_start`+"\n"+`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01Abc","name":"Bash","input":{}}}`,
+		`event: content_block_delta`+"\n"+`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"echo hi\"}"}}`,
+		`event: content_block_stop`+"\n"+`data: {"type":"content_block_stop","index":0}`,
+		`event: message_delta`+"\n"+`data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null,"safeguard_results":`+reviewed+`},"usage":{"output_tokens":4}}`,
+		`event: message_stop`+"\n"+`data: {"type":"message_stop"}`)
+}
+
+// askReview sends reviewAsk(model) to s as Claude Code does.
+func askReview(t *testing.T, s *Server, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", path, strings.NewReader(body))
+	req.Header.Set("User-Agent", "claude-cli/2.1.295 (external, sdk-cli)")
+	req.Header.Set("anthropic-beta", reviewBetas)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	s.Handler().ServeHTTP(rec, req)
+	return rec
+}
+
+// reviewIn is the safeguard_results of a streamed reply's message_delta,
+// where Claude Code reads them.
+func reviewIn(t *testing.T, stream string) string {
+	t.Helper()
+	for _, e := range events(stream) {
+		if e["type"] == "message_delta" {
+			if d, _ := e["delta"].(map[string]any); d["safeguard_results"] != nil {
+				b, _ := json.Marshal(d["safeguard_results"])
+				return string(b)
+			}
+		}
+	}
+	return ""
+}
+
 // Anthropic's API reviews the actions itself when asked: the
 // dangerous-tool-use beta and the safeguards field go to it as Claude Code
-// sent them, and safeguard_results come back as it answered them. (This
-// passes on main too; it guards the classifier's changes from reaching a
-// Claude model.)
+// sent them, and safeguard_results come back as it answered them, the call's
+// id with them as it was. (This passes on main too; it guards the
+// classifier's changes from reaching a Claude model.)
 func TestAutoModeServerSideReviewRelayed(t *testing.T) {
-	f := &fake{t: t, reply: sse(
-		`event: message_start`+"\n"+`data: {"type":"message_start","message":{"id":"msg_1","model":"claude-sonnet-5","usage":{"input_tokens":7}}}`,
-		`event: content_block_start`+"\n"+`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01Abc","name":"Bash","input":{}}}`,
-		`event: content_block_delta`+"\n"+`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"ls\"}"}}`,
-		`event: content_block_stop`+"\n"+`data: {"type":"content_block_stop","index":0}`,
-		`event: message_delta`+"\n"+`data: {"type":"message_delta","delta":{"stop_reason":"tool_use","safeguard_results":[{"type":"dangerous_tool_use","tool_uses":[{"tool_use_id":"toolu_01Abc","status":"evaluated","result":"not_flagged"}]}]},"usage":{"output_tokens":4}}`,
-		`event: message_stop`+"\n"+`data: {"type":"message_stop"}`)}
+	f := &fake{t: t, reply: reviewReply("claude-sonnet-5")}
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	up := httptest.NewServer(f)
@@ -169,37 +221,169 @@ func TestAutoModeServerSideReviewRelayed(t *testing.T) {
 	if err := provider.Save(provider.Provider{ID: "ant", Name: "Ant", Key: "k", Anthropic: up.URL, Models: []string{"claude-sonnet-5"}}); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"model":"ant/claude-sonnet-5","max_tokens":64,"stream":true,
-	  "safeguards":[{"type":"dangerous_tool_use","classifier_context":"The user allows file edits in the project."}],
-	  "tools":[{"name":"Bash","input_schema":{"type":"object"}}],
-	  "messages":[{"role":"user","content":[{"type":"text","text":"<transcript>\n"},{"type":"text","text":"list the files"}]}]}`
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/v1/messages?beta=true", strings.NewReader(body))
-	req.Header.Set("User-Agent", "claude-cli/2.1.285 (external, cli)")
-	req.Header.Set("anthropic-beta", "claude-code-20250219,dangerous-tool-use-2026-09-03")
-	req.Header.Set("anthropic-version", "2023-06-01")
-	New().Handler().ServeHTTP(rec, req)
+	rec := askReview(t, New(), "/v1/messages?beta=true", reviewAsk("ant/claude-sonnet-5"))
 	if rec.Code != 200 {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 	if !strings.Contains(f.head.Get("anthropic-beta"), "dangerous-tool-use-2026-09-03") {
 		t.Errorf("beta not forwarded: %q", f.head.Get("anthropic-beta"))
 	}
-	var asked map[string]any
+	var asked struct {
+		Safeguards json.RawMessage `json:"safeguards"`
+		MaxTokens  int             `json:"max_tokens"`
+	}
 	json.Unmarshal(f.got, &asked)
-	sg, _ := asked["safeguards"].([]any)
-	if len(sg) != 1 || sg[0].(map[string]any)["classifier_context"] != "The user allows file edits in the project." || asked["max_tokens"] != float64(64) {
+	if !sameReview(asked.Safeguards, []byte(reviewAsked)) || asked.MaxTokens != 64000 {
 		t.Errorf("request changed: %s", f.got)
 	}
-	var delta map[string]any
-	for _, e := range events(rec.Body.String()) {
-		if e["type"] == "message_delta" {
-			delta, _ = e["delta"].(map[string]any)
+	if got := reviewIn(t, rec.Body.String()); !sameReview([]byte(got), []byte(reviewed)) || !strings.Contains(rec.Body.String(), `"id":"toolu_01Abc"`) {
+		t.Errorf("safeguard_results not relayed: %s", rec.Body)
+	}
+}
+
+// sameReview reports whether a and b are the same JSON value.
+func sameReview(a, b []byte) bool {
+	var x, y any
+	return json.Unmarshal(a, &x) == nil && json.Unmarshal(b, &y) == nil && reflect.DeepEqual(x, y)
+}
+
+// Only Claude reviews actions: another vendor's model behind its Anthropic
+// API (DeepSeek's, Kimi's) is sent neither the beta nor the safeguards,
+// which a vendor checking what it is sent turns the request away over
+// (AiHubMix: 400 "safeguards: Extra inputs are not permitted"). Claude
+// Code, given no verdict, classifies locally. The agent's other betas go on,
+// and its count_tokens likewise goes without the beta.
+func TestAutoModeReviewOnlyForClaude(t *testing.T) {
+	f := &fake{t: t}
+	f.refuse = func(body []byte) (int, string) {
+		if strings.Contains(f.head.Get("anthropic-beta"), "dangerous-tool-use") || strings.Contains(string(body), `"safeguards"`) {
+			return 400, `{"type":"error","error":{"type":"invalid_request_error","message":"safeguards: Extra inputs are not permitted"}}`
+		}
+		return 0, ""
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	up := httptest.NewServer(f)
+	t.Cleanup(up.Close)
+	if err := provider.Save(provider.Provider{ID: "ds", Name: "DeepSeek", Key: "k", Anthropic: up.URL, Models: []string{"deepseek-flash"}}); err != nil {
+		t.Fatal(err)
+	}
+	s := New()
+	f.reply = sse(
+		`event: message_start`+"\n"+`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"deepseek-flash","content":[],"usage":{"input_tokens":7}}}`,
+		`event: content_block_start`+"\n"+`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`event: content_block_delta`+"\n"+`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`,
+		`event: content_block_stop`+"\n"+`data: {"type":"content_block_stop","index":0}`,
+		`event: message_delta`+"\n"+`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+		`event: message_stop`+"\n"+`data: {"type":"message_stop"}`)
+	if rec := askReview(t, s, "/v1/messages?beta=true", reviewAsk("ds/deepseek-flash")); rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(string(f.got), `"safeguards"`) {
+		t.Errorf("safeguards sent to DeepSeek: %s", f.got)
+	}
+	beta := f.head.Get("anthropic-beta")
+	if strings.Contains(beta, "dangerous-tool-use") || !strings.Contains(beta, "claude-code-20250219") || !strings.Contains(beta, "afk-mode-2026-01-31") {
+		t.Errorf("anthropic-beta to DeepSeek: %q", beta)
+	}
+
+	f.ctype, f.reply = "application/json", `{"input_tokens":12}`
+	if rec := askReview(t, s, "/v1/messages/count_tokens?beta=true", `{"model":"ds/deepseek-flash","messages":[{"role":"user","content":"hi"}]}`); rec.Code != 200 {
+		t.Fatalf("count_tokens: %d %s", rec.Code, rec.Body)
+	}
+	if f.path != "/v1/messages/count_tokens" || strings.Contains(f.head.Get("anthropic-beta"), "dangerous-tool-use") {
+		t.Errorf("count_tokens to DeepSeek: %s %q", f.path, f.head.Get("anthropic-beta"))
+	}
+}
+
+// A provider that turned the beta away (Bedrock's runtime: Unexpected
+// value(s) for the anthropic-beta header) is asked again without it, and
+// without the safeguards it turns on, which it would turn away next.
+func TestAutoModeReviewGoesWithItsBeta(t *testing.T) {
+	f := &fake{t: t, reply: reviewReply("claude-sonnet-5")}
+	f.refuse = func(body []byte) (int, string) {
+		if strings.Contains(f.head.Get("anthropic-beta"), "dangerous-tool-use") {
+			return 400, `{"message":"Unexpected value(s) ` + "`dangerous-tool-use-2026-09-03`" + ` for the ` + "`anthropic-beta`" + ` header. Please consult our documentation at docs.anthropic.com or try again without the header."}`
+		}
+		if strings.Contains(string(body), `"safeguards"`) {
+			return 400, `{"message":"safeguards: Extra inputs are not permitted"}`
+		}
+		return 0, ""
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	up := httptest.NewServer(f)
+	t.Cleanup(up.Close)
+	if err := provider.Save(provider.Provider{ID: "ant", Name: "Ant", Key: "k", Anthropic: up.URL, Models: []string{"claude-sonnet-5"}}); err != nil {
+		t.Fatal(err)
+	}
+	s := New()
+	for i := range 2 {
+		f.calls = 0
+		rec := askReview(t, s, "/v1/messages?beta=true", reviewAsk("ant/claude-sonnet-5"))
+		if rec.Code != 200 {
+			t.Fatalf("turn %d: %d %s", i, rec.Code, rec.Body)
+		}
+		if strings.Contains(string(f.got), `"safeguards"`) || !strings.Contains(f.head.Get("anthropic-beta"), "claude-code-20250219") {
+			t.Errorf("turn %d went as %q: %s", i, f.head.Get("anthropic-beta"), f.got)
+		}
+		if i == 1 && f.calls != 1 {
+			t.Errorf("the next turn took %d requests, want 1", f.calls)
 		}
 	}
-	res, _ := delta["safeguard_results"].([]any)
-	if len(res) != 1 || !strings.Contains(rec.Body.String(), `"tool_use_id":"toolu_01Abc"`) {
-		t.Errorf("safeguard_results not relayed: %s", rec.Body)
+}
+
+// A reply its vendor gave whole goes to Claude Code, which asked a stream,
+// as the stream would have said it: the verdict in the message_delta,
+// where Claude Code reads it, not the message_start, where it finds no
+// result and leaves the review for the session.
+func TestAutoModeReviewOfAWholeReplyStreamed(t *testing.T) {
+	whole := `{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-5","content":[{"type":"tool_use","id":"toolu_01Abc","name":"Bash","input":{"command":"echo hi"}}],"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":7,"output_tokens":4},"safeguard_results":` + reviewed + `}`
+	rec := httptest.NewRecorder()
+	if !wholeAsStream(rec, provider.Anthropic, []byte(whole)) {
+		t.Fatal("not a reply")
+	}
+	if got := reviewIn(t, rec.Body.String()); !sameReview([]byte(got), []byte(reviewed)) {
+		t.Errorf("verdict not in message_delta: %s", rec.Body)
+	}
+	for _, e := range events(rec.Body.String()) {
+		if m, _ := e["message"].(map[string]any); e["type"] == "message_start" && m["safeguard_results"] != nil {
+			t.Errorf("verdict in message_start: %v", e)
+		}
+	}
+}
+
+// A turn of Claude Code's translated to an Anthropic endpoint (the
+// candidates' loop, not relayed) asks Claude the review and gives Claude
+// Code its verdict; another vendor's model isn't asked it.
+func TestAutoModeReviewTranslated(t *testing.T) {
+	req, err := parseAnthropic([]byte(reviewAsk("claude-sonnet-5")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Safeguards json.RawMessage `json:"safeguards"`
+	}
+	json.Unmarshal(buildAnthropic(req, "claude-sonnet-5"), &out)
+	if !sameReview(out.Safeguards, []byte(reviewAsked)) {
+		t.Errorf("safeguards to Claude: %s", out.Safeguards)
+	}
+	if b := buildAnthropic(req, "deepseek-flash"); strings.Contains(string(b), `"safeguards"`) {
+		t.Errorf("safeguards to DeepSeek: %s", b)
+	}
+
+	rec := httptest.NewRecorder()
+	enc := &anthropicEncoder{w: newSSEWriter(rec), model: "claude-sonnet-5"}
+	dec := decoder(provider.Anthropic)
+	for _, e := range events(reviewReply("claude-sonnet-5")) {
+		b, _ := json.Marshal(e)
+		if err := dec(string(b), enc.event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	enc.finish()
+	if got := reviewIn(t, rec.Body.String()); !sameReview([]byte(got), []byte(reviewed)) || !strings.Contains(rec.Body.String(), `"id":"toolu_01Abc"`) {
+		t.Errorf("verdict not given back: %s", rec.Body)
 	}
 }
 
@@ -453,7 +637,9 @@ func TestClaudeBridgeSafeguardWSLEnv(t *testing.T) {
 }
 
 // A context update and its tool-result handoff own the run together, through
-// the reply's end. Another caller cannot update it or abort its owner.
+// the reply's end. Another caller cannot update it or abort its owner: it is
+// a conversation of its own from there (a fork sub-agent of the same lead),
+// and gets a run of its own, not a 409 (ylorn on Discord).
 func TestClaudeBridgeSafeguardConcurrentHandoff(t *testing.T) {
 	s := New()
 	b := s.subscription
@@ -491,21 +677,23 @@ func TestClaudeBridgeSafeguardConcurrentHandoff(t *testing.T) {
 		t.Helper()
 		body := []byte(`{"model":"claude-sonnet-5","max_tokens":64,"safeguards":[{"context":"B"}],"messages":[{"role":"assistant","content":"call"},{"role":"user","content":[{"type":"tool_result","tool_use_id":"` + id + `","content":"B"}]}]}`)
 		done := make(chan int, 1)
+		var started atomic.Bool
 		go func() {
 			rec := httptest.NewRecorder()
 			code, _ := s.serveSubscription(rec, httptest.NewRequest("POST", "/v1/messages", nil), provider.Anthropic, "Claude Code", req.Model, "", body, &Usage{},
 				func(context.Context, *Request) (*subscriptionRun, <-chan Event, error) {
-					return nil, nil, fmt.Errorf("must not start another run")
+					started.Store(true)
+					return nil, nil, fmt.Errorf("a run of its own")
 				})
 			done <- code
 		}()
 		select {
 		case code := <-done:
-			if code != 409 || run.closed || string(run.safeguards) != string(req.Safeguards) {
-				t.Fatalf("second caller: status %d, closed %v, context %s", code, run.closed, run.safeguards)
+			if code == 409 || !started.Load() || run.closed || string(run.safeguards) != string(req.Safeguards) {
+				t.Fatalf("second caller: status %d, own run %v, closed %v, context %s", code, started.Load(), run.closed, run.safeguards)
 			}
 		case <-time.After(2 * time.Second):
-			t.Fatal("second caller did not reject the claimed run")
+			t.Fatal("second caller was held on the claimed run")
 		}
 	}
 	blocked("a")

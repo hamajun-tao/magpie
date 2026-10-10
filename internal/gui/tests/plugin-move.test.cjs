@@ -97,6 +97,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       page.on("pageerror", (e) => errors.push(e.message));
       await page.route("**/*", serve(lang, posts));
       await page.goto("http://magpie.test/?view=providers");
+      await page.waitForLoadState("networkidle");
 
       // the deprecation notice over the list opens Zed's editor
       const line = page.locator("#movable");
@@ -115,6 +116,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.equal(await ed.locator(".move > div").first().getAttribute("title"), pkg, "the package isn't in the tooltip");
       assert.ok(!text.includes(pkg), "names the npm package in the sentence");
       assert.ok(text.includes(w.own), "doesn't say Zed stays signed in");
+      await page.waitForFunction(() => document.querySelector(".dialog")?.getAnimations().every((a) => a.playState !== "running"));
 
       // the reader scrolled to the field: nothing the move does moves it.
       // A wheel, as a reader's scroll (a script's scrollTop is put back), and
@@ -126,7 +128,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       for (let i = 0; i < 20 && (await btn.boundingBox()).y > box.y + 40; i++) {
         const was = await at();
         await page.mouse.wheel(0, 30);
-        await page.waitForTimeout(80);
+        await page.waitForTimeout(700);
         if (await at() === was) break;
       }
       const top = await at();

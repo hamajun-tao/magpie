@@ -138,6 +138,12 @@ const (
 	// fmtCommandCode is Command Code's mcp.json: transport stdio or http,
 	// and enabled
 	fmtCommandCode
+	// fmtAlma is Alma's ~/.config/alma/mcp.json: a url is streamable HTTP
+	// (SSE when that fails) unless transport says sse, a command stdio
+	fmtAlma
+	// fmtZed is Zed's settings.json context_servers: command/args/env, or
+	// url/headers, which Zed speaks streamable HTTP to
+	fmtZed
 )
 
 // mcpFile is the file an agent keeps its user-wide MCP servers in.
@@ -158,6 +164,9 @@ type mcpFile struct {
 	// Home its $HOME as the distro spells it
 	WSL          bool
 	Distro, Home string
+	// Literal: what reads the file reads no reference to a variable
+	// (pi-mcp-extension), whatever its format's syntax (refsOf)
+	Literal bool
 }
 
 // files are every file the servers are written into.
@@ -174,6 +183,8 @@ func (f *mcpFile) key() string {
 		return "extensions"
 	case fmtZCode:
 		return "mcp.servers"
+	case fmtZed:
+		return "context_servers"
 	}
 	return "mcpServers"
 }
@@ -183,11 +194,14 @@ func (f *mcpFile) supports(s *Server) error {
 	if f.Format == fmtDesktop && s.Remote() {
 		return errNoRemote
 	}
-	if s.Transport == "sse" && (f.Format == fmtCodex || f.Format == fmtGoose || f.Format == fmtDsh || f.Format == fmtPiNative || f.Format == fmtGrok || f.Format == fmtCommandCode) {
+	if s.Transport == "sse" && (f.Format == fmtCodex || f.Format == fmtGoose || f.Format == fmtDsh || f.Format == fmtPiNative || f.Format == fmtGrok || f.Format == fmtCommandCode || f.Format == fmtZed) {
 		return errNoSSE
 	}
 	if f.Format == fmtDsh && s.Name != "" && !dshServerName.MatchString(s.Name) {
 		return errDshName
+	}
+	if err := f.refsProblem(s); err != nil {
+		return err
 	}
 	_, err := f.side(s)
 	return err
@@ -197,6 +211,23 @@ func (f *mcpFile) supports(s *Server) error {
 // backslash in it, or …/npx.cmd.
 var windowsPath = regexp.MustCompile(`^[A-Za-z]:[\\/]|\\|(?i)\.(?:exe|cmd|bat|ps1)$`)
 
+// foreign says why an entry by the server's name that magpie can't read as
+// a server is one it mustn't write over, or nil: Zed's server from an
+// extension is its "settings" alone, which a command written beside it
+// would take the place of, and taking the server off Zed then would take
+// the extension's settings with it.
+func (f *mcpFile) foreign(old map[string]any) error {
+	if f.Format != fmtZed || old == nil {
+		return nil
+	}
+	if _, ok := f.decode("", old); ok {
+		return nil
+	}
+	return errZedExtension
+}
+
+var errZedExtension = errors.New("Zed has a server by this name from one of its extensions, which magpie leaves as it is: give the server another name to give it to Zed")
+
 // errNoRemote is what the page says of an app that reaches only a server
 // it runs itself (Claude Desktop, whose remote ones are its Connectors).
 var errNoRemote = errors.New("no-remote")
@@ -204,7 +235,8 @@ var errNoRemote = errors.New("no-remote")
 // errNoSSE is what the page says of an agent that can't reach a server
 // over SSE (Codex, Goose, DeepSeek Harness, Pi's own MCP, Grok Build — its
 // type = "sse" is taken, but it speaks streamable HTTP to it all the same,
-// Command Code, whose own add refuses sse).
+// Command Code, whose own add refuses sse, Zed, whose only remote transport
+// POSTs to the url: crates/context_server/src/transport/http.rs).
 var errNoSSE = errors.New("no-sse")
 
 // ordered is a JSON object that keeps its keys in the order given, so an
@@ -311,6 +343,11 @@ func isNumber(v any, n float64) bool {
 // encode is the server as this agent writes it.
 func (f *mcpFile) encode(s *Server) ordered {
 	var o ordered
+	// references to variables in the agent's own syntax (envref.go)
+	r := f.refsOf()
+	c := *s
+	c.Headers, c.Env = mapTo(r.headers, s.Headers), mapTo(r.env, s.Env)
+	s = &c
 	add := func(k string, v any) { o = append(o, kv{k, v}) }
 	optional := func(k string, m map[string]string) {
 		if len(m) > 0 {
@@ -352,7 +389,12 @@ func (f *mcpFile) encode(s *Server) ordered {
 			optional("environment", s.Env)
 		}
 		add("enabled", true)
-	case fmtCursor, fmtDesktop:
+	case fmtCursor, fmtDesktop, fmtZed:
+		// Zed's own Add Local Server and Add Remote Server write these keys
+		// (docs/src/ai/mcp.md); its settings read a command as the Stdio
+		// form and a url as the Http one, with no "source" or "type"
+		// (crates/settings_content/src/project.rs
+		// ContextServerSettingsContent, zed-industries/zed 2c99f547)
 		if s.Remote() {
 			add("url", s.URL)
 			optional("headers", s.Headers)
@@ -381,14 +423,24 @@ func (f *mcpFile) encode(s *Server) ordered {
 			add("type", "streamable_http")
 			add("uri", s.URL)
 			optional("headers", s.Headers)
+			// Goose fills a header's ${NAME} only from a name listed here
+			if keys := gooseKeys(s.Headers, nil); len(keys) > 0 {
+				add("env_keys", keys)
+			}
 		case "sse":
 			add("type", "sse")
 			add("uri", s.URL)
 		default:
+			// a command's variable comes through env_keys, as envs are
+			// given as written
+			plain, pass := codexEnv(s.Env)
 			add("type", "stdio")
 			add("cmd", s.Command)
 			add("args", list(s.Args))
-			optional("envs", s.Env)
+			optional("envs", plain)
+			if len(pass) > 0 {
+				add("env_keys", pass)
+			}
 		}
 		add("timeout", selfTimeout(s, 300))
 	case fmtPi:
@@ -418,10 +470,12 @@ func (f *mcpFile) encode(s *Server) ordered {
 			add("args", list(s.Args))
 			optional("env", s.Env)
 		}
-	case fmtHermes:
+	case fmtHermes, fmtAlma:
 		// Hermes' own `hermes mcp add` writes url/headers or
 		// command/args/env; transport: sse is its only other transport
-		// (tools/mcp_tool.py)
+		// (tools/mcp_tool.py). Alma's own add writes the same keys, and
+		// it reads transport "sse" alone, else tries streamable HTTP
+		// first (0.4.164's out/main/index.js connectRemoteServer)
 		if s.Remote() {
 			add("url", s.URL)
 			optional("headers", s.Headers)
@@ -513,29 +567,45 @@ func (f *mcpFile) encode(s *Server) ordered {
 			optional("env", s.Env)
 		}
 	case fmtCodex:
+		// a reference is a variable Codex reads by name: Authorization's
+		// bearer token, a header whole, a variable passed on to a command
 		if s.Remote() {
+			plain, bearer, fromEnv := codexHeaders(s.Headers)
 			add("url", s.URL)
-			optional("http_headers", s.Headers)
+			optional("http_headers", plain)
+			if bearer != "" {
+				add("bearer_token_env_var", bearer)
+			}
+			optional("env_http_headers", fromEnv)
 		} else {
+			plain, pass := codexEnv(s.Env)
 			add("command", s.Command)
 			add("args", list(s.Args))
-			optional("env", s.Env)
+			optional("env", plain)
+			if len(pass) > 0 {
+				add("env_vars", pass)
+			}
 		}
 		// Codex gives a tool a minute unless its entry says more
 		if t := selfTimeout(s, 0); t > 0 {
 			add("tool_timeout_sec", t)
 		}
 	case fmtDsh:
+		// a reference is a !!js expression dsh evaluates (dshRef)
 		add("serverName", s.Name)
 		if s.Remote() {
 			add("transport", "streamable-http")
 			add("url", s.URL)
-			optional("headers", s.Headers)
+			if len(s.Headers) > 0 {
+				add("headers", dshRefs(s.Headers))
+			}
 		} else {
 			add("transport", "stdio")
 			add("command", s.Command)
 			add("args", list(s.Args))
-			optional("env", s.Env)
+			if len(s.Env) > 0 {
+				add("env", dshRefs(s.Env))
+			}
 		}
 	}
 	return o
@@ -586,6 +656,10 @@ func (f *mcpFile) decode(name string, m map[string]any) (*Server, bool) {
 		switch str(m, "type") {
 		case "stdio":
 			local(str(m, "cmd"), m["args"], m["envs"])
+			// a variable Goose reads by name comes back as a reference
+			for _, n := range codexEnvVars(m["env_keys"]) {
+				putRef(&s.Env, n, "${"+n+"}")
+			}
 		case "streamable_http":
 			remote("http", str(m, "uri"), m["headers"])
 		case "sse":
@@ -607,10 +681,21 @@ func (f *mcpFile) decode(name string, m map[string]any) (*Server, bool) {
 			local(str(m, "command"), m["args"], m["env"])
 		}
 	case fmtCodex:
+		// the variables Codex reads by name come back as references
+		ref := putRef
 		if u := str(m, "url"); u != "" {
 			remote("http", u, m["http_headers"])
+			if b := str(m, "bearer_token_env_var"); b != "" {
+				ref(&s.Headers, "Authorization", "Bearer ${"+b+"}")
+			}
+			for k, v := range strMap(m["env_http_headers"]) {
+				ref(&s.Headers, k, "${"+v+"}")
+			}
 		} else {
 			local(str(m, "command"), m["args"], m["env"])
+			for _, n := range codexEnvVars(m["env_vars"]) {
+				ref(&s.Env, n, "${"+n+"}")
+			}
 		}
 	case fmtGemini:
 		if u := str(m, "httpUrl"); u != "" {
@@ -625,19 +710,28 @@ func (f *mcpFile) decode(name string, m map[string]any) (*Server, bool) {
 			local(str(m, "command"), m["args"], m["env"])
 		}
 	case fmtDsh:
-		// a value dsh works out itself (!!js) isn't one magpie can hold
+		// a variable read as dshRef writes it is a reference; any other
+		// value dsh works out itself (!!js) isn't one magpie can hold
+		headers, env := dshUnrefs(m["headers"]), dshUnrefs(m["env"])
 		for _, k := range owned[fmtDsh] {
-			if hasJS(m[k]) {
+			v := m[k]
+			switch k {
+			case "headers":
+				v = headers
+			case "env":
+				v = env
+			}
+			if hasJS(v) {
 				return nil, false
 			}
 		}
 		switch str(m, "transport") {
 		case "stdio":
-			local(str(m, "command"), m["args"], m["env"])
+			local(str(m, "command"), m["args"], env)
 		case "streamable-http":
-			remote("http", str(m, "url"), m["headers"])
+			remote("http", str(m, "url"), headers)
 		}
-	case fmtHermes, fmtKimi, fmtDevin:
+	case fmtHermes, fmtKimi, fmtDevin, fmtAlma:
 		// each takes a url over a command when an entry has both
 		if u := str(m, "url"); u != "" {
 			t := "http"
@@ -696,7 +790,7 @@ func (f *mcpFile) decode(name string, m map[string]any) (*Server, bool) {
 		} else {
 			local(str(m, "command"), m["args"], m["env"])
 		}
-	default: // Claude Code, Cursor, Copilot, Crush, ZCode, omp, Grok
+	default: // Claude Code, Cursor, Copilot, Crush, ZCode, omp, Grok, Zed
 		t := str(m, "type")
 		if u := str(m, "url"); u != "" {
 			if t != "sse" {
@@ -710,6 +804,8 @@ func (f *mcpFile) decode(name string, m map[string]any) (*Server, bool) {
 	if len(s.Args) == 0 {
 		s.Args = nil
 	}
+	r := f.refsOf()
+	s.Headers, s.Env = mapFrom(r.headers, s.Headers), mapFrom(r.env, s.Env)
 	if s.Transport == "" || (s.Transport == "stdio" && s.Command == "") || (s.Remote() && s.URL == "") {
 		return nil, false
 	}
@@ -794,7 +890,7 @@ func (f *mcpFile) has(s *Server) bool {
 		if err != nil {
 			continue
 		}
-		cur, ok := a.decode(s.Name, es[s.Name])
+		cur, ok := a.current(s.Name, es[s.Name], s)
 		if es[s.Name] == nil || !ok || !cur.same(s) {
 			return false
 		}
@@ -823,9 +919,11 @@ var owned = map[mcpFormat][]string{
 	fmtCursor:   {"type", "url", "headers", "command", "args", "env"},
 	fmtCopilot:  {"type", "url", "headers", "command", "args", "env"},
 	fmtGoose:    {"enabled", "name", "type", "uri", "headers", "cmd", "args", "envs"},
-	fmtCodex:    {"url", "http_headers", "command", "args", "env"},
-	fmtDesktop:  {"url", "headers", "command", "args", "env"},
-	fmtPi:       {"transport", "httpTransport", "url", "headers", "command", "args", "env"},
+	// and bearer_token_env_var, env_http_headers or env_vars while the
+	// server references a variable there (mine)
+	fmtCodex:   {"url", "http_headers", "command", "args", "env"},
+	fmtDesktop: {"url", "headers", "command", "args", "env"},
+	fmtPi:      {"transport", "httpTransport", "url", "headers", "command", "args", "env"},
 	// the adapter's transport keys too, dropped when magpie writes the
 	// entry again
 	fmtPiNative: {"type", "transport", "httpTransport", "url", "headers", "command", "args", "env"},
@@ -833,6 +931,7 @@ var owned = map[mcpFormat][]string{
 	fmtDsh:      {"serverName", "transport", "url", "headers", "command", "args", "env"},
 	// timeout, enabled, tools, sampling, auth… are the user's
 	fmtHermes: {"transport", "url", "headers", "command", "args", "env"},
+	fmtAlma:   {"transport", "url", "headers", "command", "args", "env"},
 	fmtOmp:    {"type", "url", "headers", "command", "args", "env"},
 	fmtKimi:   {"transport", "type", "url", "headers", "command", "args", "env"},
 	fmtDevin:  {"transport", "type", "url", "headers", "command", "args", "env"},
@@ -841,9 +940,57 @@ var owned = map[mcpFormat][]string{
 	// the flat shape's keys go when magpie writes the entry again
 	fmtCline:       {"transport", "type", "transportType", "url", "headers", "command", "args", "cwd", "env"},
 	fmtCommandCode: {"transport", "type", "url", "headers", "command", "args", "env"},
+	// enabled, remote, timeout and oauth are the user's
+	fmtZed: {"url", "headers", "command", "args", "env"},
 
 	// a url agy read in place of serverUrl goes when magpie writes one
 	fmtAntigravity: {"type", "serverUrl", "url", "headers", "command", "args", "env"},
+}
+
+// mine are the keys of the entry magpie writes for s. The keys of Codex's
+// and Goose's that name a variable are magpie's only while s references
+// one there (refKeys): an env_vars or env_keys the user gave a server
+// whose library entry has none stays theirs.
+func (f *mcpFile) mine(s *Server) []string {
+	if extra := f.refKeys(s); len(extra) > 0 {
+		return append(slices.Clone(owned[f.Format]), extra...)
+	}
+	return owned[f.Format]
+}
+
+// current is the agent's entry read as the server, for comparing with s:
+// what decode reads, but for the variables a Codex or Goose entry names in
+// keys that are the user's rather than magpie's (mine).
+func (f *mcpFile) current(name string, m map[string]any, s *Server) (*Server, bool) {
+	cur, ok := f.decode(name, m)
+	if !ok || cur == nil || len(f.refKeys(s)) > 0 {
+		return cur, ok
+	}
+	keep := func(got map[string]string, key string) map[string]string {
+		plain, _ := m[key].(map[string]any)
+		for k := range got {
+			if _, set := plain[k]; !set {
+				delete(got, k)
+			}
+		}
+		if len(got) == 0 {
+			return nil
+		}
+		return got
+	}
+	switch f.Format {
+	case fmtCodex:
+		if cur.Remote() {
+			cur.Headers = keep(cur.Headers, "http_headers")
+		} else {
+			cur.Env = keep(cur.Env, "env")
+		}
+	case fmtGoose:
+		if !cur.Remote() {
+			cur.Env = keep(cur.Env, "envs")
+		}
+	}
+	return cur, true
 }
 
 // merged is the entry magpie writes, with what the user added to the old
@@ -851,11 +998,19 @@ var owned = map[mcpFormat][]string{
 // yields to the user's.
 func (f *mcpFile) merged(s *Server, old map[string]any) ordered {
 	o := f.encode(s)
-	mine := owned[f.Format]
+	mine := f.mine(s)
 	behind := f.behind(s, old)
 	for i, e := range o {
 		if v, ok := old[e.k]; ok && !slices.Contains(mine, e.k) && !(behind && f.Format == fmtGoose && e.k == "timeout") {
 			o[i].v = v
+		}
+		// Codex's env_vars as the user wrote them ({ name, source }), or
+		// Goose's env_keys in their order, while they name the same
+		// variables
+		if v, ok := old[e.k]; ok && (f.Format == fmtCodex && e.k == "env_vars" || f.Format == fmtGoose && e.k == "env_keys") {
+			if want, _ := e.v.([]string); slices.Equal(slices.Sorted(slices.Values(codexEnvVars(v))), want) {
+				o[i].v = v
+			}
 		}
 	}
 	keys := slices.Sorted(maps.Keys(old))

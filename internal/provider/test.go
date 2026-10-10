@@ -38,7 +38,7 @@ func (p Provider) Test(ctx context.Context) []Result {
 	if p.DecideOnly() {
 		return p.testDecide(ctx)
 	}
-	p.Fetch(ctx)
+	_, listErr := p.Fetch(ctx)
 	if p.isClaudeAccount() {
 		return []Result{p.testClaude(ctx, p.testModel(p, Anthropic))}
 	}
@@ -53,7 +53,12 @@ func (p Provider) Test(ctx context.Context) []Result {
 		url, body := tiny(q, proto, UpstreamName(p, model))
 		out = append(out, probe(ctx, q, proto, url, q.Prepare([]byte(body)), model, testWait))
 	}
-	if p.Decides() {
+	if p.IsRemoteMagpie() {
+		// The model list already checked its key and named its decisions.
+		if model := p.Jev(); listErr == nil && model != "" {
+			out = append(out, Result{Protocol: "decide", Model: model, OK: true, Status: http.StatusOK})
+		}
+	} else if p.Decides() {
 		out = append(out, p.testDecide(ctx)...)
 	}
 	return out
@@ -117,7 +122,7 @@ func (p Provider) ModelTest() string {
 		return ""
 	}
 	for _, pr := range p.Speaks() {
-		if pr == Chat || pr == Responses || pr == Anthropic {
+		if pr == Chat || pr == Responses || pr == Anthropic || pr == Gemini && p.Gemini != "" {
 			return ""
 		}
 	}
@@ -148,8 +153,11 @@ func tinyBody(q Provider, proto Protocol, model string) (url, body string) {
 	case Anthropic:
 		return q.Anthropic + "/v1/messages", fmt.Sprintf(`{"model":%q,"max_tokens":16,"messages":[{"role":"user","content":"不要问为什么，只回复ok"}]}`, model)
 	case Gemini:
-		// Factory's generate route. droid sends no stream field.
-		return q.Base(Gemini) + "/generate", fmt.Sprintf(`{"model":%q,"contents":[{"role":"user","parts":[{"text":"不要问为什么，只回复ok"}]}]}`, model)
+		if q.FactoryGemini() {
+			// Factory's generate route. droid sends no stream field.
+			return q.Base(Gemini) + "/generate", fmt.Sprintf(`{"model":%q,"contents":[{"role":"user","parts":[{"text":"不要问为什么，只回复ok"}]}]}`, model)
+		}
+		return q.Gemini + GeminiPath(model, false), `{"contents":[{"role":"user","parts":[{"text":"不要问为什么，只回复ok"}]}],"generationConfig":{"maxOutputTokens":16}}`
 	}
 	return "", ""
 }
@@ -356,6 +364,12 @@ func AuthHeaders(p Provider, proto Protocol) map[string]string {
 		}
 		return map[string]string{"api-key": p.Key}
 	}
+	if proto == Gemini && !p.FactoryGemini() {
+		// Google's Gemini API takes an API key here, and turns one away as
+		// a Bearer token ("Expected OAuth 2 access token"); relays that
+		// answer as it does read it here too
+		return map[string]string{"x-goog-api-key": p.Key}
+	}
 	if proto == Anthropic {
 		if strings.HasSuffix(p.Host(), "anthropic.com") || p.IsBedrock() {
 			return map[string]string{"x-api-key": p.Key}
@@ -383,7 +397,9 @@ func probeReply(ctx context.Context, p Provider, proto Protocol, url string, bod
 		return r
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("anthropic-version", "2023-06-01")
+	if proto == Anthropic {
+		req.Header.Set("anthropic-version", "2023-06-01")
+	}
 	if p.IsOpenCode() {
 		OpenCodeClient(req.Header, "")
 	}

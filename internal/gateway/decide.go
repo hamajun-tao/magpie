@@ -353,7 +353,7 @@ func (s *Server) systemOne(ctx context.Context, p provider.Provider, model strin
 // the provider answers in another one. DecideURL and Sign errors are as
 // they are; a transport error is named with p.
 func (s *Server) postDecide(ctx context.Context, p provider.Provider, model string, body []byte) (int, []byte, string, error) {
-	ctx = p.Via(ctx)
+	ctx = s.metered(p.Via(ctx), p, "") // counted against its MaxRPM (rpm.go)
 	u, err := p.DecideModelURL(ctx, model)
 	if err != nil {
 		return 0, nil, "", err
@@ -366,6 +366,10 @@ func (s *Server) postDecide(ctx context.Context, p provider.Provider, model stri
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", RouterAgent)
+	if p.IsRemoteMagpie() {
+		req.Header.Set("User-Agent", "magpie/"+Version)
+		passOnCaller(ctx, req)
+	}
 	if via == provider.ViaVercelEval {
 		// what the AI SDK's gateway provider sends with an evaluation
 		req.Header.Set("ai-gateway-protocol-version", "0.0.1")
@@ -376,7 +380,7 @@ func (s *Server) postDecide(ctx context.Context, p provider.Provider, model stri
 	if err := p.Sign(ctx, req, provider.Chat, body); err != nil {
 		return 0, nil, "", err
 	}
-	res, err := s.client.Do(req)
+	res, err := p.Do(s.client, req)
 	if err != nil {
 		return 0, nil, "", fmt.Errorf("%s: %v", p.Name, err)
 	}
@@ -400,7 +404,7 @@ const maxSystemOneBody = 16 << 20
 // conversation is: the Routing view and the day's jsonl would otherwise
 // never see Jev, which answers no /v1/chat/completions.
 func (s *Server) serveSystemOne(w http.ResponseWriter, r *http.Request) {
-	body, ok := s.readRequestBody(w, r, provider.Chat, nil, maxSystemOneBody)
+	body, ok := s.readRequestBody(w, r, provider.Chat, maxSystemOneBody)
 	if !ok {
 		return
 	}
@@ -456,7 +460,8 @@ func (s *Server) serveSystemOne(w http.ResponseWriter, r *http.Request) {
 	}
 	seat := decideSeat(p, model)
 	var used Usage
-	tr := s.trace.begin(Route{Time: start, Agent: agentOf(r), Session: sessionOf(r.Header), Model: asked, Provider: p.ID,
+	who := callerOf(r)
+	tr := s.trace.begin(Route{Time: start, Agent: who.agent, Session: sessionOf(r.Header), Model: asked, Provider: p.ID,
 		Order: []Weighed{seat}, Tries: []Try{{ID: seat.ID, Model: model, Start: start}}})
 	end := func(status int, msg string, tokens int) {
 		ms := time.Since(start).Milliseconds()
@@ -494,7 +499,7 @@ func (s *Server) serveSystemOne(w http.ResponseWriter, r *http.Request) {
 	if p.Account == nil && p.Key != "" {
 		keyID, keyName = provider.KeyID(p.Key), p.KeyName
 	}
-	appendUsage(r, usage.Record{RouteID: tr.ID, Time: start, Agent: agentOf(r), Provider: p.ID, Host: p.Where(), Model: model, Requested: asked, Served: use.Model,
+	appendUsage(r, usage.Record{RouteID: tr.ID, Time: start, Agent: who.agent, Via: who.via, Provider: p.ID, Host: p.Where(), Model: model, Requested: asked, Served: use.Model,
 		ProviderKeyID: keyID, ProviderKeyName: keyName, ProviderAccount: accountOf(p),
 		Input: use.Usage.Input, Output: use.Usage.Output, Millis: time.Since(start).Milliseconds(), Status: status})
 	end(status, errMsg, tokens)

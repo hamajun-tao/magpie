@@ -115,8 +115,8 @@ func TestMCPProxy(t *testing.T) {
 	}
 }
 
-// Another machine is lent magpie's sign-ins only through the gateway shared
-// on the local network, with its key.
+// Another machine is lent magpie's sign-ins only with an enabled gateway
+// key: a gateway MAGPIE_ADDR puts on the network asks for one too.
 func TestMCPProxyStaysHere(t *testing.T) {
 	fresh(t)
 	t.Setenv("MAGPIE_ADDR", "0.0.0.0:3425")
@@ -127,7 +127,7 @@ func TestMCPProxyStaysHere(t *testing.T) {
 	r.RemoteAddr = "192.168.1.9:5000"
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != http.StatusForbidden || len(f.Calls) != 0 {
+	if w.Code != http.StatusUnauthorized || len(f.Calls) != 0 {
 		t.Fatalf("another machine got %d, calls %v", w.Code, f.Calls)
 	}
 }

@@ -75,7 +75,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     });
 
     await page.goto("http://magpie.test/?view=gateway");
-    await page.locator("#gwModels .row.model").first().waitFor();
+    await page.locator("#gwModels .row.model:not(.gw-sk-row)").first().waitFor();
     assert.deepEqual(await ids(page), ["group/smart", "acme/gpt-5.5", "acme/gpt-5.5-mini", "acme/text-only", "zeta/glm-5", "zeta/kimi-k3"]);
 
     // the info at each row's end, and its tooltip

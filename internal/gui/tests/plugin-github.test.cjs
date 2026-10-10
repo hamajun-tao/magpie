@@ -22,7 +22,7 @@ const { chromium, webkit } = require("playwright");
 const assets = path.resolve(__dirname, "../assets");
 
 const REPOS = [
-  { spec: "opencode-claude-auth", repo: "griffinmartin/opencode-claude-auth", url: "https://github.com/griffinmartin/opencode-claude-auth", owner: "griffinmartin", ownerAvatar: "https://avatars.githubusercontent.com/u/1090329?v=4", description: "OpenCode plugin that uses your existing Claude Code credentials — no separate login needed. ", stars: 1301, license: "MIT", pushed: "2026-09-22T23:47:15Z", package: "opencode-claude-auth", version: "2.2.1" },
+  { spec: "opencode-claude-auth", repo: "griffinmartin/opencode-claude-auth", url: "https://github.com/griffinmartin/opencode-claude-auth", owner: "griffinmartin", ownerAvatar: "https://avatars.githubusercontent.com/u/1090329?v=4", description: "OpenCode plugin that uses your existing Claude Code credentials — no separate login needed. ", stars: 1301, license: "MIT", pushed: "2026-09-22T23:47:15Z", package: "opencode-claude-auth", version: "2.2.1", icon: "file:claude-auth.svg" },
   { spec: "@slkiser/opencode-quota", repo: "slkiser/opencode-quota", url: "https://github.com/slkiser/opencode-quota", owner: "slkiser", ownerAvatar: "https://avatars.githubusercontent.com/u/35721408?v=4", description: "OpenCode quota & tokens usage with zero context window pollution. Supports OpenCode Go, Cursor, GitHub Copilot, OpenAl, Kimi Code, Alibaba Coding Plan, Chutes Al, Google Antigravity, Z.ai Coding Plan and more.", stars: 1000, license: "MIT", pushed: "2026-10-06T13:25:50Z", package: "@slkiser/opencode-quota", version: "5.0.2" },
   { spec: "github:keli-wen/agy-staff", repo: "keli-wen/agy-staff", url: "https://github.com/keli-wen/agy-staff", owner: "keli-wen", ownerAvatar: "https://avatars.githubusercontent.com/u/103916249?v=4", description: "Hire Google's Antigravity CLI (agy) as a fast Gemini staffer for Claude Code and OpenAI Codex.", stars: 723, license: "MIT", pushed: "2026-10-06T16:29:15Z", package: "agy-staff", version: "0.7.4" },
   { spec: "@rama_nigg/open-cursor", repo: "Nomadcxx/opencode-cursor", url: "https://github.com/Nomadcxx/opencode-cursor", owner: "Nomadcxx", ownerAvatar: "https://avatars.githubusercontent.com/u/143774106?v=4", description: "Use Cursor Pro models in OpenCode via HTTP proxy with OAuth", stars: 704, license: "BSD-3-Clause", pushed: "2026-10-02T12:34:45Z", package: "@rama_nigg/open-cursor", version: "2.5.11" },
@@ -65,6 +65,7 @@ function server(lang, asked) {
       return json(state());
     }
     if (url.pathname === "/api/open") { asked.push(["open", body()]); return route.fulfill({ status: 204 }); }
+    if (url.pathname === "/api/icons/claude-auth.svg") return route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="#d97757"/></svg>' });
     if (url.pathname.startsWith("/api/")) return json({});
     if (!/^\/[\w./-]*$/.test(url.pathname) || url.host !== "magpie.test") { asked.push(["fetched", url.href]); return route.fulfill({ status: 404, body: "" }); }
     const file = path.join(assets, url.pathname === "/" ? "index.html" : url.pathname);
@@ -120,6 +121,11 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
           const c = cards.first();
           assert.equal((await c.locator(".pm-by").innerText()).trim(), "griffinmartin");
+          // the picture its package.json gives (magpie.icon), as magpie keeps it; one that gives none, the puzzle
+          assert.equal(await c.locator(".pm-logo img").getAttribute("src"), "/api/icons/claude-auth.svg");
+          assert.equal(await cards.nth(2).locator(".pm-logo img").count(), 0);
+          // a provider and a middleware part by hue (yetone: 中间件和供应商稍微有点区分吧)
+          assert.equal(await c.locator(".pm-chip.kind.pv").count(), 1);
           assert.equal((await c.locator(".pm-chip.warn").innerText()).trim(), w.chip);
           assert.match(await c.locator(".pm-chip.warn").getAttribute("title"), /magpie-plugin/);
           assert.equal((await c.locator(".pm-dl").innerText()).trim(), "1.3k");

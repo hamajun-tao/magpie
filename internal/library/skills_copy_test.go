@@ -43,7 +43,7 @@ func TestSkillCopyFollowsTheLibrary(t *testing.T) {
 	}
 
 	version = "two"
-	ok(t)(UpdateSkill("pdf"))
+	ok(t)(UpdateSkill("pdf", false))
 	if s := read(t, filepath.Join(p, "SKILL.md")); !strings.Contains(s, "PDFs two") {
 		t.Fatalf("claude's copy after the update:\n%s", s)
 	}

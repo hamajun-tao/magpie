@@ -109,6 +109,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // ¥ CNY moves nothing
         await page.locator("#currencySegs").hover();
         for (let i = 0; i < 20 && !(await view(page)); i++) { await page.mouse.wheel(0, 200); await page.waitForTimeout(20); }
+        // WebKitGTK applies one wheel step over several frames. Measure the
+        // click after that gesture ends, rather than while it is still moving.
+        await page.waitForTimeout(700);
         const before = await view(page);
         assert(before > 0, "the settings list must be long enough to scroll");
         const tall = () => page.locator("#view-settings").evaluate((v) => v.getBoundingClientRect().height);

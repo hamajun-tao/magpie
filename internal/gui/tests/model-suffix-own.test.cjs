@@ -99,7 +99,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const box = await page.locator("#view-settings").boundingBox();
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       const top = () => page.locator("#plainNamesSegs").evaluate((e) => e.getBoundingClientRect().top);
-      for (let i = 0; i < 40 && (await top()) > 240; i++) { await page.mouse.wheel(0, 100); await page.waitForTimeout(30); }
+      // Let the native wheel finish before recording a click's position.
+      for (let i = 0; i < 40 && (await top()) > 240; i++) { await page.mouse.wheel(0, 100); await page.waitForTimeout(700); }
       const before = await view(page);
       assert(before > 0, "the settings list must scroll to the row");
       await segs.nth(2).click();

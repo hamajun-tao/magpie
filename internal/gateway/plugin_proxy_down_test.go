@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,16 +14,14 @@ import (
 
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 // A plugin account whose proxy is down, HTTP or SOCKS5, never reached its
 // vendor: as for a built-in's (TestProxyDownDoesNotRest), the next account
 // answers and the first isn't set aside.
 func TestPluginProxyDownDoesNotRest(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	for _, scheme := range []string{"http", "socks5"} {
 		t.Run(scheme, func(t *testing.T) {
 			fresh(t)

@@ -45,6 +45,9 @@ async function open(browser, opts, web, view) {
   await page.route("**/*", serve(web));
   await page.goto("http://magpie.test/?view=" + view);
   await page.waitForSelector("#view-" + view, { state: "visible" });
+  // Initial state and view data must finish before adding the flick's
+  // tall fixture; a later render would remove it and clamp the scroll.
+  await page.waitForLoadState("networkidle");
   await page.waitForTimeout(300);
   return page;
 }

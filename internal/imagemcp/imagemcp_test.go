@@ -272,6 +272,33 @@ func TestBothToolsAreListed(t *testing.T) {
 	}
 }
 
+// generate_video's description names every kind of video model the
+// gateway makes videos with (gateway.Videomakers), so an agent given the
+// tool with Seedance or a custom provider set up doesn't tell its user it
+// needs a Grok subscription (#1399).
+func TestVideoToolSaysEveryVideoModel(t *testing.T) {
+	c := startVideo(t, &vgw{}, t.TempDir())
+	res := c.call("tools/list", map[string]any{})
+	tools, _ := res["tools"].([]any)
+	var desc string
+	for _, tl := range tools {
+		if m, _ := tl.(map[string]any); m["name"] == "generate_video" {
+			desc, _ = m["description"].(string)
+		}
+	}
+	if desc == "" {
+		t.Fatalf("no generate_video in %v", res)
+	}
+	for _, want := range []string{"Grok", "Seedance", "another Magpie", "model list marks video models"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("description leaves out %q: %s", want, desc)
+		}
+	}
+	if strings.Contains(desc, "no other video model") {
+		t.Errorf("description says Grok is the only video model: %s", desc)
+	}
+}
+
 func TestGenerateVideoWaitsAndSavesTheMP4(t *testing.T) {
 	g := &vgw{polls: 2}
 	project := t.TempDir()

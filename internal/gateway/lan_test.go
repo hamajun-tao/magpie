@@ -78,9 +78,25 @@ func TestLANGuard(t *testing.T) {
 	}
 	s.LAN = false
 	settings.Save(s)
+	// MAGPIE_ADDR on the network, not shared (the Docker image): another
+	// machine, a container's host among them, needs an enabled key too
 	t.Setenv("MAGPIE_ADDR", "0.0.0.0:3499")
-	if c := call("192.168.1.9:5000"); c != 200 {
-		t.Fatal("explicit open gateway", c)
+	for _, hdr := range [][]string{nil, {"Authorization", "Bearer magpie"}, {"x-api-key", "wrong"}} {
+		for _, from := range []string{"192.168.1.9:5000", "172.17.0.1:40312", "[fd00::1]:5000"} {
+			if c := call(from, hdr...); c != http.StatusUnauthorized || id != "" {
+				t.Fatal("MAGPIE_ADDR on the network, not shared:", from, hdr, c)
+			}
+		}
+	}
+	secret, err = access.Update("add-key", access.Change{Name: "Host"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := call("172.17.0.1:40312", "Authorization", "Bearer "+secret); c != 200 || id == "" || got != "Bearer magpie|" {
+		t.Fatal("MAGPIE_ADDR on the network, with a key:", c, id, got)
+	}
+	if c := call("127.0.0.1:5000", "Authorization", "Bearer anything"); c != 200 {
+		t.Fatal("loopback, MAGPIE_ADDR on the network:", c)
 	}
 }
 
@@ -101,6 +117,11 @@ func TestURLOfWildcard(t *testing.T) {
 func TestAgentOf(t *testing.T) {
 	for _, c := range []struct{ auth, key, ua, want string }{
 		{"Bearer " + TokenFor("alma"), "", "ai-sdk/openai/2.0.52 ai-sdk/provider-utils/3.0.12 runtime/node.js/v22", "alma"},
+		// alma-server's (Alma 0.4's @ai-sdk/openai 4.0.15 under Node 22,
+		// whose navigator.userAgent the AI SDK appends): Alma's by the key
+		// magpie gives its provider, the AI SDK's without it (Lutra.x)
+		{"Bearer " + TokenFor("alma"), "", "ai-sdk/openai/4.0.15 ai-sdk/provider-utils/5.0.10 runtime/node.js/22", "alma"},
+		{"Bearer " + Token, "", "ai-sdk/openai/4.0.15 ai-sdk/provider-utils/5.0.10 runtime/node.js/22", "ai-sdk"},
 		{"", TokenFor("alma"), "ai-sdk/anthropic/2.0.1", "alma"},
 		{"Bearer " + TokenFor("qoder"), "", "Bun/1.4.2", "qoder"},
 		{"Bearer " + TokenFor("hanako"), "", "OpenAI/JS 6.0.0", "hanako"},
@@ -285,5 +306,77 @@ func TestLANModelsAsText(t *testing.T) {
 	}
 	if w := get("/v1/models?format=text"); w.Code != http.StatusUnauthorized {
 		t.Fatalf("no key: %d", w.Code)
+	}
+}
+
+// Every route the gateway serves — the model calls, count_tokens, System
+// One, the Responses websocket, images, retrieval, videos, Gemini, the MCP
+// sign-ins, Codex's backend and catalog, the quotas, the route and the
+// rest — refuses another machine without an enabled gateway key, when
+// MAGPIE_ADDR puts the gateway on the network and it isn't shared (the
+// Docker image, whose host reaches it from Docker's bridge). Through the
+// whole server stack, lanGuard in front of Handler.
+func TestNetworkGatewayGuardsEveryRoute(t *testing.T) {
+	fresh(t)
+	t.Setenv("MAGPIE_ADDR", "0.0.0.0:3425")
+	t.Setenv("MAGPIE_TRUST_PROXY", "")
+	if err := settings.Save(settings.Settings{LAN: false}); err != nil {
+		t.Fatal(err)
+	}
+	h := lanGuard(New().Handler())
+	routes := [][2]string{
+		{"GET", "/"}, {"GET", "/v1"}, {"GET", "/v1/models"}, {"GET", "/models"}, {"GET", "/v1/models/x"},
+		{"GET", "/muse-code/models"}, {"GET", "/api/hello"},
+		{"GET", "/v1/magpie/quotas"}, {"GET", "/v1/magpie/quotas/history"},
+		{"GET", provider.RemoteCardsPath}, {"POST", provider.RemoteRefreshPath},
+		{"GET", "/v1/magpie/route?session=s"}, {"GET", "/v1/magpie/concurrency"}, {"GET", "/v1/magpie/limit"},
+		{"POST", "/v1/chat/completions"}, {"POST", "/chat/completions"},
+		{"POST", "/v1/responses"}, {"POST", "/responses"}, {"GET", "/v1/responses"}, {"GET", "/responses"},
+		{"POST", "/v1/messages"}, {"POST", "/messages"}, {"POST", "/v1/messages/count_tokens"},
+		{"POST", "/v1/systemone"},
+		{"POST", "/v1/images/generations"}, {"POST", "/v1/images/edits"},
+		{"POST", "/v1/embeddings"}, {"POST", "/v1/rerank"},
+		{"POST", "/v1/videos"}, {"GET", "/v1/videos/v1"}, {"GET", "/v1/videos/v1/content"},
+		{"POST", "/_magpie/claude-mcp/tok"}, {"POST", "/mcp/neon"},
+		{"POST", CodexPath + "/responses"}, {"GET", CodexCatalogPath},
+		{"GET", "/v1beta/models"}, {"POST", "/v1beta/models/m:generateContent"},
+		{"GET", "/nowhere"},
+	}
+	call := func(method, path, from string, hdr ...string) (int, string) {
+		r := httptest.NewRequest(method, path, strings.NewReader("{}"))
+		r.RemoteAddr = from
+		if path == "/v1/responses" || path == "/responses" {
+			r.Header.Set("Connection", "Upgrade")
+			r.Header.Set("Upgrade", "websocket")
+			r.Header.Set("Sec-WebSocket-Version", "13")
+			r.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+		}
+		for i := 0; i+1 < len(hdr); i += 2 {
+			r.Header.Set(hdr[i], hdr[i+1])
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Code, w.Body.String()
+	}
+	for _, rt := range routes {
+		for _, from := range []string{"172.17.0.1:40312", "192.168.1.9:5000"} {
+			for _, hdr := range [][]string{nil, {"Authorization", "Bearer magpie"}, {"x-api-key", "anything"}, {"x-goog-api-key", "magpie"}} {
+				if c, b := call(rt[0], rt[1], from, hdr...); c != http.StatusUnauthorized || !strings.Contains(b, "gateway key") {
+					t.Errorf("%s %s from %s with %v: %d %.120s", rt[0], rt[1], from, hdr, c, b)
+				}
+			}
+		}
+	}
+	// a gateway key gets past the guard; loopback still takes any token
+	_, secrets := newCaller(t, "Host")
+	settings.Save(settings.Settings{LAN: false}) // newCaller shares magpie
+	if c, b := call("GET", "/v1/models", "172.17.0.1:40312", "Authorization", "Bearer "+secrets[0]); c != 200 {
+		t.Fatal("with the key:", c, b)
+	}
+	if c, b := call("GET", "/v1/magpie/quotas", "172.17.0.1:40312", "x-api-key", secrets[0]); c != 200 {
+		t.Fatal("quotas with the key:", c, b)
+	}
+	if c, b := call("GET", "/v1/models", "127.0.0.1:5000", "Authorization", "Bearer magpie"); c != 200 {
+		t.Fatal("loopback:", c, b)
 	}
 }

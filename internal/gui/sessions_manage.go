@@ -6,10 +6,12 @@ import (
 	"errors"
 	"net/http"
 	"runtime"
+	"sort"
 	"time"
 
 	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/sessions"
+	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/usage"
 )
 
@@ -30,6 +32,19 @@ type manageAgentJSON struct {
 type managedJSON struct {
 	sessions.Managed
 	Via []usage.Via `json:"via,omitempty"`
+}
+
+// listedGateway are the gateway sessions the session lists show: not those
+// deleted here (sessions.DeleteGateway) and not used since.
+func listedGateway(gs []usage.GatewaySession) []usage.GatewaySession {
+	hidden := sessions.GatewayHidden()
+	out := gs[:0:0]
+	for _, g := range gs {
+		if !hidden(g.Agent, g.ID, g.Last) {
+			out = append(out, g)
+		}
+	}
+	return out
 }
 
 type trashedJSON struct {
@@ -63,39 +78,101 @@ func trashJSON(looks map[string]*agent.Agent) []trashedJSON {
 }
 
 func sessionManageRoutes(mux *http.ServeMux, w Windows) {
+	mux.HandleFunc("POST /api/sessions/recording", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			On    bool `json:"on"`
+			Clear bool `json:"clear"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 1024)).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		if err := sessions.SetGatewayRecording(in.On, in.Clear); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, map[string]bool{"recording": settings.Load().GatewayConversations})
+	})
 	// manage is the agents with sessions, and every session of ?agent=
 	// (the one with the most when none is named), and the trash.
 	mux.HandleFunc("GET /api/sessions/manage", func(rw http.ResponseWriter, r *http.Request) {
 		looks := agentLooks()
 		out := struct {
-			Agents   []manageAgentJSON `json:"agents"`
-			Agent    string            `json:"agent"`
-			Sessions []managedJSON     `json:"sessions"`
-			Terminal bool              `json:"terminal"`
-			Trash    []trashedJSON     `json:"trash"`
-			TrashDir string            `json:"trashDir"`
+			Agents    []manageAgentJSON `json:"agents"`
+			Agent     string            `json:"agent"`
+			Sessions  []managedJSON     `json:"sessions"`
+			Terminal  bool              `json:"terminal"`
+			Trash     []trashedJSON     `json:"trash"`
+			TrashDir  string            `json:"trashDir"`
+			Recording bool              `json:"recording"`
+			// Recorded: some gateway conversation text is kept, to delete
+			Recorded bool `json:"recorded"`
 		}{Agents: []manageAgentJSON{}, Sessions: []managedJSON{}, Terminal: runtime.GOOS == "darwin" && !isWeb(w),
-			Trash: trashJSON(looks), TrashDir: tilde(sessions.TrashDir())}
+			Trash: trashJSON(looks), TrashDir: tilde(sessions.TrashDir()), Recording: settings.Load().GatewayConversations,
+			Recorded: sessions.HasGatewayConversations()}
 		want := r.URL.Query().Get("agent")
+		counts := map[string]*manageAgentJSON{}
 		for _, a := range sessions.Agents() {
 			j := manageAgentJSON{AgentCount: a, Name: a.Agent, Icon: "generic"}
 			if l := looks[a.Agent]; l != nil {
 				j.Name, j.Icon = l.Name, l.Icon
 			}
-			out.Agents = append(out.Agents, j)
-			if a.Agent == want {
-				out.Agent = want
+			counts[a.Agent] = &j
+		}
+		gateway := listedGateway(usage.GatewaySessions(time.Time{}, nil))
+		nativeCounts := map[string]map[string]bool{}
+		for _, s := range sessions.List(sessions.All) {
+			if nativeCounts[s.Agent] == nil {
+				nativeCounts[s.Agent] = map[string]bool{}
 			}
+			nativeCounts[s.Agent][s.ID] = true
+		}
+		for _, s := range gateway {
+			if nativeCounts[s.Agent][s.ID] {
+				continue
+			}
+			j := counts[s.Agent]
+			if j == nil {
+				j = &manageAgentJSON{AgentCount: sessions.AgentCount{Agent: s.Agent}, Name: s.Agent, Icon: "generic"}
+				if l := looks[s.Agent]; l != nil {
+					j.Name, j.Icon = l.Name, l.Icon
+				}
+				counts[s.Agent] = j
+			}
+			j.Count++
+			// what magpie keeps of it can be deleted, whatever the agent
+			j.Deletable = true
+		}
+		for _, j := range counts {
+			out.Agents = append(out.Agents, *j)
+		}
+		sort.Slice(out.Agents, func(i, j int) bool {
+			if out.Agents[i].Count != out.Agents[j].Count {
+				return out.Agents[i].Count > out.Agents[j].Count
+			}
+			return out.Agents[i].Agent < out.Agents[j].Agent
+		})
+		if _, ok := counts[want]; ok {
+			out.Agent = want
 		}
 		if out.Agent == "" && len(out.Agents) > 0 {
 			out.Agent = out.Agents[0].Agent
 		}
 		if out.Agent != "" {
 			list := sessions.ListAgent(out.Agent)
+			native := map[string]bool{}
+			for _, s := range list {
+				native[s.ID] = true
+			}
 			since := time.Now()
 			for _, s := range list {
 				if !s.Start.IsZero() && s.Start.Before(since) {
 					since = s.Start
+				}
+			}
+			for _, g := range gateway {
+				if g.Agent == out.Agent && !g.Start.IsZero() && g.Start.Before(since) {
+					since = g.Start
 				}
 			}
 			vias := usage.Vias(since.Add(-time.Minute))
@@ -103,11 +180,25 @@ func sessionManageRoutes(mux *http.ServeMux, w Windows) {
 				s.Path = tilde(s.Path)
 				out.Sessions = append(out.Sessions, managedJSON{Managed: s, Via: vias[s.Agent+"|"+s.ID]})
 			}
+			sizes := sessions.GatewaySizes()
+			for _, g := range gateway {
+				if g.Agent != out.Agent || native[g.ID] {
+					continue
+				}
+				s := gatewaySession(g)
+				// its size is the conversation text magpie recorded of it
+				m := sessions.Managed{Session: s, Deletable: true, Size: sizes(s.Agent, s.ID)}
+				out.Sessions = append(out.Sessions, managedJSON{Managed: m, Via: vias[s.Agent+"|"+s.ID]})
+			}
+			sort.SliceStable(out.Sessions, func(i, j int) bool {
+				return out.Sessions[i].Last.After(out.Sessions[j].Last)
+			})
 		}
 		writeJSON(rw, out)
 	})
 	// delete moves the sessions named to magpie's trash, one by one; one
-	// still being written is left, and said so.
+	// still being written is left, and said so. One seen only through the
+	// gateway, of any agent, has what magpie keeps of it moved there.
 	mux.HandleFunc("POST /api/sessions/delete", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Agent string   `json:"agent"`
@@ -117,9 +208,18 @@ func sessionManageRoutes(mux *http.ServeMux, w Windows) {
 			fail(rw, err)
 			return
 		}
-		if !sessions.Deletable(in.Agent) {
-			fail(rw, errors.New("magpie can't delete this agent's sessions"))
-			return
+		// the gateway sessions as listed: those with no native session
+		native := map[string]bool{}
+		for _, s := range sessions.List(sessions.All) {
+			if s.Agent == in.Agent {
+				native[s.ID] = true
+			}
+		}
+		listed := map[string]usage.GatewaySession{}
+		for _, g := range listedGateway(usage.GatewaySessions(time.Time{}, nil)) {
+			if g.Agent == in.Agent && !native[g.ID] {
+				listed[g.ID] = g
+			}
 		}
 		type refused struct {
 			ID     string `json:"id"`
@@ -131,7 +231,15 @@ func sessionManageRoutes(mux *http.ServeMux, w Windows) {
 			Refused []refused `json:"refused"`
 		}{Deleted: []string{}, Refused: []refused{}}
 		for _, id := range in.IDs {
-			if _, err := sessions.Delete(in.Agent, id); err != nil {
+			var err error
+			if g, ok := listed[id]; ok {
+				_, err = sessions.DeleteGateway(g.Agent, g.ID, g.ID, g.Last)
+			} else if !sessions.Deletable(in.Agent) {
+				err = errors.New("magpie can't delete this agent's sessions")
+			} else {
+				_, err = sessions.Delete(in.Agent, id)
+			}
+			if err != nil {
 				out.Refused = append(out.Refused, refused{ID: id, Error: err.Error(), Active: errors.Is(err, sessions.ErrActive)})
 				continue
 			}

@@ -67,6 +67,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await page.route("**/*", serve);
       await page.goto("http://magpie.test/?view=agents");
       await page.locator(`${row} .ag-conn`).waitFor();
+      // WebKit samples view-in's translation on each geometry read. Let
+      // that entrance finish before comparing half-pixel switch offsets.
+      await page.locator("#view-agents").evaluate((e) =>
+        Promise.all(e.getAnimations().map((a) => a.finished.catch(() => {}))));
 
       const shut = await where(page);
       const opening = await heights(page, 800);

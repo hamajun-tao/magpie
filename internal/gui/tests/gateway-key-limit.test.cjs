@@ -54,7 +54,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const scrolled = async () => [await view.evaluate((v) => v.scrollTop), await page.evaluate(() => window.scrollY)];
       await page.mouse.move(500, 300);
       await page.mouse.wheel(0, 120);
-      await page.waitForTimeout(100);
+      // WebKit applies the wheel over several frames; record the position
+      // after it reaches its destination, before testing clicks.
+      await page.waitForFunction(() => document.querySelector("#view-gateway").scrollTop === 120);
       const at = await scrolled();
       // open Work's editor: staged, nothing sent
       await row("work").getByRole("button", { name: w.limit, exact: true }).click();
@@ -117,6 +119,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await row("server").getByRole("button", { name: w.change, exact: true }).click();
       await row("server").locator(".key-limit-ed").waitFor();
       await page.setViewportSize({ width: 560, height: 740 });
+      // The header fits on the next frame after ResizeObserver delivery.
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
       assert.deepEqual(errors, []);
     });

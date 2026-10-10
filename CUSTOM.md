@@ -12,7 +12,7 @@ magpie provider health status      # 查看每个中转站、密钥、模型的�
 magpie provider health off         # 停用检测，恢复原来的路由行为
 ```
 
-配置针对普通 URL/API 密钥提供商的文本模型，覆盖 Chat Completions、Responses 和 Anthropic Messages。订阅账号、专有 API、决策模型和图片生成保持各自原有的检测机制。
+配置针对普通 URL/API 密钥提供商的文本模型，覆盖 Chat Completions、Responses 和 Anthropic Messages。名称或上游名称包含 embedding/embed、rerank 的检索模型，以及元数据明确仅支持 Gemini 的模型，不使用聊天探测或因此被屏蔽。订阅账号、专有 API、决策模型和图片生成保持各自原有的检测机制。
 
 开启后，新增或修改地址、密钥、认证头、模型映射等配置，需要成功检测才能用于请求。检测分别记录每个中转站、密钥和模型：一个密钥失败不会屏蔽另一个可用密钥。模型列表、路由组、备用模型和直接指定模型均遵守屏蔽结果，只使用检测通过的接口协议。
 
@@ -61,9 +61,9 @@ git push origin custom
 ssh root@100.100.1.4 magpie-update
 ```
 
-已登录服务器时直接运行 `magpie-update`。它读取本仓库的 `custom` 和已同步的 `main`，在独立目录合并；检查回滚流程、完整 Go 测试、模型检测并发测试（20 次）、`go vet`，运行本次变化的网页测试及涉及界面资源时的日文、德文本地化测试（Chromium 和 WebKit），并构建 Linux 服务和 Windows 程序。合并或检查失败时退出，线上服务继续运行。
+已登录服务器时直接运行 `magpie-update`。它读取本仓库的 `custom` 和已同步的 `main`，在独立目录合并；检查回滚流程、完整 Go 测试、模型检测并发测试（20 次）、Linux/Windows `go vet`，运行本次变化的网页测试；涉及界面资源时运行全部网页测试和各语言用例（Chromium 和 WebKit），并构建 Linux 服务和 Windows 程序。网页测试使用两个并行文件和独立的 4 小时上限，其他步骤为 30 分钟；超时会停止该步骤及其子进程，包括独立进程组中的浏览器。合并或检查失败时退出，线上服务继续运行。
 
-检查通过后，流程暂停服务，备份完整配置、密钥、健康状态和启动环境，再切换版本。验收检查管理页面和网关认证、模型列表、实际运行版本，以及中转站、调用密钥、设置、模型检测开关和策略是否保留。验收失败会恢复旧程序和完整配置，并重新检查旧服务。同一份代码重复执行只验收服务，无需重启。并发更新会被拒绝。
+检查通过后，流程暂停服务，备份完整配置、密钥、健康状态和启动环境，再切换版本。验收检查管理页面和网关认证、模型列表、实际运行版本，以及中转站、调用密钥、设置、模型检测开关和策略是否保留。验收失败会恢复旧程序和完整配置，并重新检查旧服务。停止命令报错时会核实服务已停止，再恢复配置；若新版仍在运行，则保留备份并停止更新。同一份代码重复执行只验收服务，无需重启。并发更新会被拒绝。
 
 ```sh
 magpie-update --check-only    # 只合并、测试、构建，不切换线上程序
@@ -72,7 +72,7 @@ cat /opt/magpie/last-update.json
 
 每次执行的详细日志和报告在 `/opt/magpie/maintenance/runs/<执行编号>/`；切换前的备份在 `/opt/magpie/backups/<执行编号>/`。这些目录仅供服务器管理员和构建账号使用，不要公开，其中备份包含密钥。旧发布目录保留在 `/opt/magpie/releases/`。
 
-服务器不保存 GitHub 写入凭据。该命令会把未来的合并部署到服务器；合并提交保留在服务器本地，不会自动推回 GitHub。GitHub 的 `custom` 可通过上一节的合并命令同步保存，不能强制重置。更新程序为 [`scripts/update_server.py`](scripts/update_server.py)，仅适用于本次部署的目录、服务和工具版本；其他服务器需调整常量并单独安装。
+服务器不保存 GitHub 写入凭据。该命令会把未来的合并部署到服务器；合并提交保留在服务器本地，不会自动推回 GitHub。GitHub 的 `custom` 可通过上一节的合并命令同步保存，不能强制重置。更新程序为 [`scripts/update_server.py`](scripts/update_server.py)，使用服务器已校验安装的 Go 1.26.9 编译器，仅适用于本次部署的目录、服务和工具版本；其他服务器需调整常量并单独安装。
 
 本次部署采用 Linux 无桌面程序和 `magpie.service`，避免容器自动更新替换定制程序。程序在 `/opt/magpie/current/magpie`，配置和数据在 `/var/lib/magpie`，管理访问密钥在 `/etc/magpie.env`。登录链接和网关调用密钥另存于服务器 `/root/magpie-access.txt`，不要提交这些文件。
 

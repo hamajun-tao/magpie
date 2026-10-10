@@ -88,7 +88,7 @@ func TestTUIAddsARemoteMagpieWithItsAddress(t *testing.T) {
 
 // Adding a provider fetches its list and says what came of it — how many
 // models, or why none — and m on the Providers page fetches it again, as
-// the app editor's Refresh does (akic404 on Discord: added from the TUI,
+// the app editor's Fetch models does (akic404 on Discord: added from the TUI,
 // a remote magpie had 0 models, with nothing said and no way to fetch
 // them).
 func TestTUIFetchesAProvidersModels(t *testing.T) {

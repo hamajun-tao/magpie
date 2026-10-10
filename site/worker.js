@@ -8,6 +8,10 @@
 //                          Both take ?lang=zh for the notes in Chinese, where a
 //                          release has them (below its <!-- lang:zh --> marker);
 //                          any other lang, or none, is the English alone.
+//   /api/partners          {partners: [...]}: the add sheet's Partners (partners.js),
+//                          their website and key links through /go
+//   /go/<id>/keys[/<region>], /go/<id>/site[/<region>]
+//                          a partner's key page or website, counted
 //   /download              the Apple Silicon dmg
 //   /download/mac-arm64    the same;  /download/mac-intel  the Intel dmg
 //   /download/windows      the Windows app (x64);  /download/windows-arm64
@@ -22,6 +26,7 @@
 // Everything else is the static site in public/.
 
 import { LANGS } from "./i18n.js";
+import { PARTNERS } from "./partners.js";
 
 const REPO = "yetone/magpie-releases";
 const TTL = 300; // seconds the newest release is remembered
@@ -55,6 +60,22 @@ export default {
       if (!got) return json({ error: "no release yet" }, 503, NO_STORE);
       const lang = url.searchParams.get("lang");
       return json({ ...got.rel, notes: inLang(got.rel.notes, lang) }, 200, cacheFor(got));
+    }
+    if (url.pathname === "/api/partners") {
+      const now = Date.now();
+      if (PARTNERS.some((p) => live(p, now)) && Math.random() < 1 / FETCH_SAMPLE)
+        ctx.waitUntil(capture("magpie partners fetch", { weight: FETCH_SAMPLE, country: country(req) }));
+      return json({ partners: served(PARTNERS, now) }, 200, { "Cache-Control": "public, max-age=600" });
+    }
+    if (url.pathname.startsWith("/go/")) {
+      let id, what, region, to;
+      try {
+        [, , id, what, region] = url.pathname.split("/").map(decodeURIComponent);
+        to = goTarget(PARTNERS, id, what, region);
+      } catch {}
+      if (!to) return new Response("not found\n", { status: 404 });
+      if (req.method === "GET") ctx.waitUntil(capture("magpie partner go", { id, what, region: region || "", country: country(req) }));
+      return new Response(null, { status: 302, headers: { Location: to, "Cache-Control": "no-store" } });
     }
     if (url.pathname === "/api/notes") {
       const got = await releases(ctx, env);
@@ -111,6 +132,66 @@ export default {
     return beacon(await env.ASSETS.fetch(req));
   },
 };
+
+// A partner's reach and clicks are counted here, not in the app: the app's
+// own counts (provider.CountPartner) go only from users who let the stats
+// go, and these are what the server sees anyway. /api/partners hands out
+// each partner's website and key page as a /go link, which counts the
+// click (event "magpie partner go") and sends the browser on. Each app
+// fetches the list every six hours, so the fetches tell how many apps a
+// partner can be seen in: one in FETCH_SAMPLE is sent, as "magpie partners
+// fetch" with weight FETCH_SAMPLE (sum it), and only while someone is
+// listed. No id, address or account goes: a country, at most.
+const FETCH_SAMPLE = 10;
+const GO = "https://usemagpie.ai/go/";
+const POSTHOG = "https://us.i.posthog.com/i/v0/e/";
+// the Magpie project's PostHog key, as the app's (internal/stats): it can
+// send events and read nothing
+const POSTHOG_KEY = "phc_nyDyYyrUTRGvNq5U7FBesCyM2j4GdKeqGp8ko7DBerTC";
+
+// live reports whether a partner's term includes now.
+function live(p, now) {
+  return (!p.from || Date.parse(p.from) <= now) && (!p.until || now < Date.parse(p.until));
+}
+
+// served is the list the app gets: those whose term hasn't ended (an
+// ended one stays in partners.js, so the /go links of providers added from
+// it keep working), with their website and key page as /go links.
+export function served(list, now) {
+  const go = (p, what, r) => GO + [p.id, what, r && r.id].filter(Boolean).map(encodeURIComponent).join("/");
+  const linked = (o, p, r) => ({ ...o, ...(o.website && { website: go(p, "site", r) }), ...(o.keysUrl && { keysUrl: go(p, "keys", r) }) });
+  return list
+    .filter((p) => !p.until || now < Date.parse(p.until))
+    .map((p) => ({ ...linked(p, p), ...(p.regions && { regions: p.regions.map((r) => linked(r, p, r)) }) }));
+}
+
+// goTarget is where a /go link sends the browser: the partner's own key
+// page or website, the region's where it has one. Only partners.js's own
+// addresses, never one the link names.
+export function goTarget(list, id, what, region) {
+  const p = list.find((x) => x.id === id);
+  const field = what === "keys" ? "keysUrl" : what === "site" ? "website" : "";
+  if (!p || !field) return "";
+  if (!region) return p[field] || "";
+  const r = (p.regions || []).find((x) => x.id === region);
+  return r ? r[field] || p[field] || "" : "";
+}
+
+function country(req) {
+  return (req.cf && req.cf.country) || "";
+}
+
+// capture sends one event to PostHog, under an id of its own: a count, not
+// a person.
+async function capture(event, props) {
+  try {
+    await fetch(POSTHOG, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key: POSTHOG_KEY, event, distinct_id: crypto.randomUUID(), properties: { ...props, $process_person_profile: false } }),
+    });
+  } catch {}
+}
 
 // preferred is the home page's language for this browser: the one picked on
 // the page (the lang cookie), else the first of its Accept-Language that the

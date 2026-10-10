@@ -1,13 +1,16 @@
 package gui
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -37,6 +40,21 @@ type sessionsJSON struct {
 	Dirs     []string `json:"dirs"` // where they were read from
 }
 
+func gatewayExternal(g usage.GatewaySession) sessions.ExternalSession {
+	e := sessions.ExternalSession{Agent: g.Agent, ID: g.ID, Start: g.Start, Last: g.Last, Tokens: g.Tokens, Cost: g.Cost, Unpriced: g.Unpriced}
+	for _, m := range g.Models {
+		e.Models = append(e.Models, sessions.ExternalModel{Model: m.Model, Tokens: m.Tokens, Cost: m.Cost, Priced: m.Priced})
+	}
+	for _, d := range g.Daily {
+		e.Daily = append(e.Daily, sessions.ExternalDayUsage{Date: d.Date, Agent: d.Agent, Model: d.Model, Tokens: d.Tokens, Cost: d.Cost, Priced: d.Priced})
+	}
+	return e
+}
+
+func gatewaySession(g usage.GatewaySession) sessions.Session {
+	return sessions.MergeExternal(nil, []sessions.ExternalSession{gatewayExternal(g)})[0]
+}
+
 func sessionRoutes(mux *http.ServeMux, w Windows) {
 	warmSessions()
 	mux.HandleFunc("GET /api/sessions", func(rw http.ResponseWriter, r *http.Request) {
@@ -60,7 +78,20 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 		for _, d := range sessions.Dirs() {
 			out.Dirs = append(out.Dirs, tilde(d))
 		}
-		list := sessions.List(n)
+		list := sessions.List(sessions.All)
+		nativeKeys := map[string]bool{}
+		for _, s := range list {
+			nativeKeys[s.Agent+"|"+s.ID] = true
+		}
+		gateway := listedGateway(usage.GatewaySessions(time.Time{}, nativeKeys))
+		ext := make([]sessions.ExternalSession, 0, len(gateway))
+		for _, g := range gateway {
+			ext = append(ext, gatewayExternal(g))
+		}
+		list = sessions.MergeExternal(list, ext)
+		if len(list) > n {
+			list = list[:n]
+		}
 		since := time.Now()
 		for _, s := range list {
 			if !s.Start.IsZero() && s.Start.Before(since) {
@@ -119,7 +150,16 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 	// one is a session by its stats key, read however long ago it was at
 	// work: the page's top sessions reach past the latest List reads.
 	mux.HandleFunc("GET /api/sessions/one", func(rw http.ResponseWriter, r *http.Request) {
-		s, ok := sessions.Get(r.URL.Query().Get("key"))
+		key := r.URL.Query().Get("key")
+		s, ok := sessions.Get(key)
+		if !ok {
+			if a, id, found := strings.Cut(key, ":"); found {
+				if g, gok := usage.GatewaySessionByID(a, id, nil); gok {
+					s = gatewaySession(g)
+					ok = true
+				}
+			}
+		}
 		if !ok {
 			rw.Header().Set("Content-Type", "application/json")
 			rw.WriteHeader(http.StatusNotFound)
@@ -148,6 +188,15 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 		q := r.URL.Query()
 		s, ok := sessions.Find(q.Get("agent"), q.Get("id"))
 		if !ok {
+			if _, found := usage.GatewaySessionByID(q.Get("agent"), q.Get("id"), nil); found {
+				t, err := sessions.GatewayTranscript(q.Get("agent"), q.Get("id"))
+				if err != nil {
+					fail(rw, err)
+					return
+				}
+				writeJSON(rw, t)
+				return
+			}
 			fail(rw, errors.New("no such session"))
 			return
 		}
@@ -157,6 +206,35 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 			return
 		}
 		writeJSON(rw, t)
+	})
+	// markdown is a session's whole conversation as a Markdown file (#1276),
+	// read from the agent's own file as transcript is: to the browser that
+	// asks (magpie web), which saves it itself, and, in the app, to
+	// Downloads.
+	mux.HandleFunc("GET /api/sessions/markdown", func(rw http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		stem, md, err := sessionMarkdown(q.Get("agent"), q.Get("id"))
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		rw.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		rw.Header().Set("Content-Disposition", `attachment; filename="`+stem+`.md"`)
+		rw.Write(md)
+	})
+	mux.HandleFunc("POST /api/sessions/export", func(rw http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		stem, md, err := sessionMarkdown(q.Get("agent"), q.Get("id"))
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		path, err := saveDownload(downloads(), stem, ".md", bytes.NewReader(md))
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, map[string]any{"path": tilde(path)})
 	})
 	// terminal opens Terminal on a session's resume command, or, with In, on
 	// the command that carries it on in that other agent. The command is
@@ -193,6 +271,38 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 	})
 }
 
+// sessionMarkdown is a session's conversation as Markdown, and the name its
+// file is saved under: the session found as listed, never a path from the
+// page. It is made whole before any of it is sent, so a file that can't be
+// read is an error and not half a download.
+func sessionMarkdown(agentID, id string) (stem string, md []byte, err error) {
+	s, ok := sessions.Find(agentID, id)
+	if !ok {
+		return "", nil, errors.New("no such session")
+	}
+	name := s.Agent
+	for _, a := range agent.Clients() {
+		if a.ID == s.Agent {
+			name = a.Name
+		}
+	}
+	var b bytes.Buffer
+	if err := sessions.WriteMarkdown(&b, s, wslName(name, s)); err != nil {
+		return "", nil, err
+	}
+	short := []rune(s.ID)
+	if len(short) > 12 {
+		short = short[:12]
+	}
+	safe := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+			return r
+		}
+		return '-'
+	}, s.Agent+"-"+string(short))
+	return "magpie-session-" + safe, b.Bytes(), nil
+}
+
 // wslName is an agent's name for a session it ran in a WSL distro, as the
 // agent there is named (Claude Code · WSL Ubuntu); its own name otherwise.
 func wslName(name string, s sessions.Session) string {
@@ -224,7 +334,7 @@ func statsFor(days int) sessions.Stats {
 		if !k.busy && time.Since(k.at) > 10*time.Second {
 			k.busy = true
 			go func() {
-				st := sessions.StatsFor(days)
+				st := combinedSessionStats(days)
 				statsMemo.Lock()
 				k.at, k.st, k.busy = time.Now(), st, false
 				statsMemo.Unlock()
@@ -235,7 +345,7 @@ func statsFor(days int) sessions.Stats {
 		return st
 	}
 	statsMemo.Unlock()
-	st := sessions.StatsFor(days)
+	st := combinedSessionStats(days)
 	statsMemo.Lock()
 	if statsMemo.m == nil {
 		statsMemo.m = map[int]*statsKept{}
@@ -245,6 +355,28 @@ func statsFor(days int) sessions.Stats {
 	}
 	statsMemo.Unlock()
 	return st
+}
+
+func combinedSessionStats(days int) sessions.Stats {
+	st := sessions.StatsFor(days)
+	nativeKeys := map[string]bool{}
+	for _, s := range sessions.List(sessions.All) {
+		nativeKeys[s.Agent+"|"+s.ID] = true
+	}
+	var since time.Time
+	if days > 0 && st.From != "" {
+		since, _ = time.ParseInLocation(time.DateOnly, st.From, time.Local)
+	}
+	gs, gd := usage.GatewaySessionWindowExcept(since, nativeKeys)
+	ext := make([]sessions.ExternalSession, 0, len(gs))
+	for _, g := range gs {
+		ext = append(ext, gatewayExternal(g))
+	}
+	daily := make([]sessions.ExternalDayUsage, 0, len(gd))
+	for _, d := range gd {
+		daily = append(daily, sessions.ExternalDayUsage{Date: d.Date, Agent: d.Agent, Model: d.Model, Tokens: d.Tokens, Cost: d.Cost, Priced: d.Priced})
+	}
+	return sessions.MergeExternalStats(st, daily, ext)
 }
 
 // warmSessions reads every session file once magpie is up, so the Sessions
@@ -257,10 +389,25 @@ func warmSessions() {
 	}
 	go func() {
 		time.Sleep(3 * time.Second)
-		statsFor(0)
-		statsFor(30)
-		usage.QueryPage(usage.All, usage.Filter{}, 0, 50)
+		warmUp(
+			func() { statsFor(0) },
+			func() { statsFor(30) },
+			func() { usage.QueryPage(usage.All, usage.Filter{}, 0, 50) },
+		)
 	}()
+}
+
+// warmUp runs the warm-up's reads, then hands what they threw away back to
+// the system at once. Reading a long history allocates many times what it
+// keeps (a 13k-session Codex and Claude Code history: ~830 MB allocated to
+// keep ~80 MB of indexes), and Go's scavenger returns those pages only over
+// the next minutes: a magpie that had just started read ~470 MB for its
+// first two minutes at rest.
+func warmUp(steps ...func()) {
+	for _, step := range steps {
+		step()
+	}
+	debug.FreeOSMemory()
 }
 
 // openTerminal runs a command in the chosen Mac terminal through a .command

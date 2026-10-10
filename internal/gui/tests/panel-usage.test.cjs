@@ -410,7 +410,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await x.addInitScript((t) => { try { localStorage.setItem("magpie.panelTab", t); } catch {} }, tab);
         await x.route("**/*", serve(lang, [], []));
         await x.goto("http://magpie.test/?mode=panel");
-        await x.waitForTimeout(400);
+        // Quotas, rather than elapsed time, decide whether Usage is hidden.
+        await x.locator('[data-ptab="usage"][hidden]').waitFor({ state: "attached" });
         assert.deepEqual(failed, [], `the panel failed to load on the ${tab} tab`);
         assert.equal(await x.locator("#ptabs button:not([hidden])").count(), 3, `the tabs are there on ${tab}`);
       }

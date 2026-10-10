@@ -93,14 +93,17 @@ type Model struct {
 
 // Session is one agent session.
 type Session struct {
-	ReadOnly bool      `json:"read_only,omitempty"`
-	Agent    string    `json:"agent"` // magpie agent id: claude, codex, opencode, pi, omp, zcode, dsh, cline, qoder, qoder-cn, grok, workbuddy, droid, cursor, hermes, alma
-	ID       string    `json:"id"`
-	Cwd      string    `json:"cwd"`
-	Title    string    `json:"title"` // the name it was given, else the agent's own title, else the first prompt
-	Start    time.Time `json:"start"`
-	Last     time.Time `json:"last"`
-	Models   []Model   `json:"models"`
+	ReadOnly bool `json:"read_only,omitempty"`
+	// Gateway: seen only through magpie's gateway, with no file of the
+	// agent's on this computer (external.go)
+	Gateway bool      `json:"gateway,omitempty"`
+	Agent   string    `json:"agent"` // magpie agent id: claude, codex, opencode, pi, omp, zcode, dsh, cline, qoder, qoder-cn, grok, workbuddy, droid, cursor, hermes, alma
+	ID      string    `json:"id"`
+	Cwd     string    `json:"cwd"`
+	Title   string    `json:"title"` // the name it was given, else the agent's own title, else the first prompt
+	Start   time.Time `json:"start"`
+	Last    time.Time `json:"last"`
+	Models  []Model   `json:"models"`
 	Tokens
 	Cost     float64 `json:"cost"`     // USD at the effective price, for the priced models
 	Unpriced int     `json:"unpriced"` // models that spent tokens but have no known price
@@ -899,9 +902,9 @@ func List(limit int) []Session {
 		}
 		return keys[i] < keys[j]
 	})
-	if len(keys) > limit {
-		keys = keys[:limit]
-	}
+	// the keys are not truncated yet: assemble below drops an empty
+	// session, and a nonempty one must take its place rather than the
+	// page going short - an empty file is not a session (#1320)
 	// every changed file, not just the latest sessions': the first read
 	// indexes them all in one run the page can show, and the stats read
 	// after it has nothing left to do
@@ -912,6 +915,9 @@ func List(limit int) []Session {
 	for _, k := range keys {
 		if s, ok := assemble(groups[k], price); ok {
 			out = append(out, s)
+			if len(out) == limit {
+				break
+			}
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Last.After(out[j].Last) })
@@ -1375,6 +1381,46 @@ func Find(agent, id string) (Session, bool) {
 		return s, true
 	}
 	return Session{}, false
+}
+
+// Titles is the title of each session named by key (agent:id, as Get takes
+// it) that has its files on this computer: the name it was given, else the
+// agent's own title, else its first prompt. A key with no files, or a
+// session with no title, is left out. The Routing page names its sessions
+// with it (#1293).
+func Titles(keys []string) map[string]string {
+	out := map[string]string{}
+	if len(keys) == 0 {
+		return out
+	}
+	want := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		want[k] = true
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	loadCache()
+	defer closeDBs()
+	files := allFiles()
+	groups := map[string][]file{}
+	var fs []file
+	for _, f := range files {
+		if want[f.key] {
+			groups[f.key] = append(groups[f.key], f)
+			fs = append(fs, f)
+		}
+	}
+	if len(fs) == 0 {
+		return out
+	}
+	refresh(fs, files)
+	price := pricer()
+	for k, g := range groups {
+		if s, ok := assemble(g, price); ok && s.Title != "" {
+			out[k] = s.Title
+		}
+	}
+	return out
 }
 
 // Get is the session whose files are grouped under key (a Summary's Key),

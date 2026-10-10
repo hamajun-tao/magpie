@@ -306,7 +306,11 @@ func modelPrice(args []string) error {
 		case "ignored":
 			fmt.Println(faint.Render("  · a price you gave is not usable and is ignored"))
 		default:
-			fmt.Println(faint.Render("  · what its provider lists, else its maker's on models.dev · magpie model price " +
+			from := "what its provider lists, else its maker's on models.dev"
+			if p.RemotePriced(model) {
+				from = "what the other magpie counts it at"
+			}
+			fmt.Println(faint.Render("  · " + from + " · magpie model price " +
 				typedRef(id) + " <in>,<out>,<cache read>,<cache write> to change it"))
 		}
 		return nil
@@ -862,7 +866,13 @@ func modelOutput(args []string) error {
 			fmt.Println(muted.Render(id), faint.Render("· is not a model this provider serves"))
 			return nil
 		}
-		fmt.Println(bold.Render(tokenCount(e.Output)), muted.Render("· "+id))
+		// the limit agents are told and the gateway's model list gives:
+		// within the model's window (#1438)
+		out := e.PublishedOutput()
+		fmt.Println(bold.Render(tokenCount(out)), muted.Render("· "+id))
+		if out < e.Output {
+			fmt.Println(faint.Render("  · " + tokenCount(e.Output) + ", kept within its " + tokenCount(e.Context) + " window"))
+		}
 		switch {
 		case s.ModelOutputs[id] > 0 && s.ModelOutputs[p.ID+"/*"] > 0:
 			// the model's own limit is what it answers with, and --reset

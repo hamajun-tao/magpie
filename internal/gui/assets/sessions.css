@@ -41,7 +41,7 @@
 /* carrying a session on in another agent, and its conversation (#845) */
 .row.sm-sess .sess-carry { height: 24px; color: var(--fg); }
 .pop.proto-menu.sess-carry-menu { width: min(300px, calc(100vw - 16px)); background: var(--card); }
-.sess-talk-btn { height: 22px; padding: 0 8px; font-size: 11.5px; }
+.sess-talk-btn, .sess-export { height: 22px; padding: 0 8px; font-size: 11.5px; }
 .sess-talk { max-height: min(560px, 70vh); overflow-y: auto; margin-top: 4px; padding: 8px 10px 4px; border-radius: 9px; border: 1px solid var(--line-2); background: var(--bg); }
 .sm-restore { display: inline-flex; align-items: center; gap: 5px; }
 .sm-ask-list { grid-column: 1 / -1; min-width: 0; margin: 0; padding: 0; list-style: none; font-size: 12.5px; color: var(--fg); line-height: 1.6; }
@@ -77,3 +77,15 @@
 .sm-provider-list li .name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sm-provider-list li .note { flex: none; font-size: 11px; color: var(--faint); }
 .sm-provider-list { max-height: min(300px, 45vh); overflow-y: auto; }
+/* Recording gateway conversations (#1355): a setting card above the list,
+   its switch, what it keeps and where, and a labelled delete */
+.list.row.sm-record { gap: 6px 12px; min-height: 48px; padding: 9px 11px 9px 13px; height: auto; flex-wrap: wrap; }
+.sm-record .lib-switch { cursor: pointer; padding: 0; border: 0; }
+.sm-record .lib-switch:disabled { opacity: .5; cursor: default; }
+.sm-record-words { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sm-record-name { font-size: 12.5px; font-weight: 500; color: var(--fg); }
+.sm-record-sub { font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+.sm-record-clear { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 5px; }
+.sm-record-clear:hover:not(:disabled) { color: var(--red); background: var(--red-soft); }
+/* a folder's next page of sessions, under the ones drawn */
+.sm-group .sm-more { margin: 4px 8px 6px; }

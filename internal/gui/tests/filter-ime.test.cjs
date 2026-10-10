@@ -162,7 +162,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
       test(`${engine} ${lang} ${width}px: the provider keys filter takes one character a key`, async (t) => {
         const { page, errors } = await open(t, "providers");
+        // The initial provider refresh can replace the row while opening it.
+        await page.waitForLoadState("networkidle");
         await page.locator(".row.provider", { hasText: "Relay" }).first().click();
+        await page.waitForFunction(() => document.querySelector(".dialog")?.getAnimations().every((a) => a.playState !== "running"));
         await page.locator(".editor .keys-more").click();
         const q = page.locator(".keys-tools .keys-filter");
         await q.waitFor();

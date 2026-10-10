@@ -80,14 +80,26 @@ button.pm-chip:disabled { cursor: default; opacity: .6; }
 .pm-chip.moved { gap: 4px; background: var(--accent-soft); color: var(--accent); }
 .pm-chip.moved .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .pm-row .sub.ask { color: var(--fg); }
-.pm-chip.warn { gap: 4px; background: var(--amber-soft); color: var(--amber); }
-.pm-chip.warn .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+/* unofficial: a hairline and a small amber dot, quiet beside the rest
+   of the line (yetone: 这些配色有点丑，一点都不优雅精致) */
+.pm-chip.warn { gap: 5px; background: none; box-shadow: inset 0 0 0 1px var(--line); color: var(--fg-2); font-weight: 400; }
+.pm-chip.warn .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--amber); flex: none; }
+/* a provider two installed plugins sign in to: a line that wraps, never clipped */
+.pm-row .sub.pm-clash { display: block; white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+.pm-clash .dot { display: inline-block; width: 6px; height: 6px; margin: 0 5px 1px 0; border-radius: 50%; background: var(--faint); vertical-align: middle; }
+.pm-row .sub.pm-clash.warn { color: var(--amber); }
+.pm-clash.warn .dot { background: currentColor; }
 .pm-foot .pm-check { display: inline-flex; align-items: center; gap: 5px; }
 .pm-foot .pm-check .spin { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid currentColor; border-right-color: transparent; animation: spin .7s linear infinite; }
-.pm-chip.kind { gap: 3px; flex: none; }
+/* what a plugin is reads as the line's other facts do (stars, version):
+   its glyph and its word, no fill of its own */
+.pm-chip.kind { gap: 4px; flex: none; padding: 0; background: none; color: var(--fg-2); font-weight: 400; }
 .pm-chip.kind svg { flex: none; }
-.pm-chip.kind.pv { background: var(--green-soft); color: var(--green); }
-.pm-chip.kind.mw { background: var(--accent-soft); color: var(--accent); }
+/* yet the two kinds part at a glance (yetone: 中间件和供应商稍微有点区分吧):
+   each its own hue on the glyph and word, softened toward the text;
+   middleware leans teal, apart from the community badge's green */
+.pm-chip.kind.pv { color: color-mix(in srgb, var(--accent) 80%, var(--fg-2)); }
+.pm-chip.kind.mw { color: color-mix(in srgb, color-mix(in oklch, var(--green) 60%, var(--accent)) 80%, var(--fg-2)); }
 .pm-chip.soft { background: none; box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); }
 
 /* a plugin's one button */

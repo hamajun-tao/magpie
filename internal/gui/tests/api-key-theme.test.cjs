@@ -22,6 +22,19 @@ async function palette(page, selectors) {
   }, selectors);
 }
 
+async function paintedCard(page, selector) {
+  // Media emulation returns before WebKit finishes repainting a transition.
+  await page.waitForFunction((selector) => {
+    const hex = getComputedStyle(document.documentElement).getPropertyValue("--card").trim();
+    const want = `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(", ")})`;
+    return getComputedStyle(document.querySelector(selector)).backgroundColor === want;
+  }, selector);
+  // Descendant colors transition independently of the card background.
+  await page.waitForFunction((selector) => document.querySelector(selector)
+    .getAnimations({ subtree: true }).every((a) =>
+      a.effect.getComputedTiming().endTime === Infinity || a.playState !== "running"), selector);
+}
+
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
   for (const theme of (process.env.THEME ? [process.env.THEME] : ["light", "dark", "system"])) {
     test(`${engine} ${theme}: API key controls follow the global palette`, async (t) => {
@@ -47,6 +60,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       for (const scheme of ["light", "dark"]) {
         await page.emulateMedia({ colorScheme: scheme });
         await page.waitForTimeout(200);
+        await paintedCard(page, "#gatewayKeys .accts");
         const { colors: c, elements: e } = await palette(page, gatewaySelectors);
         assert.equal(e.card.bg, c.card);
         assert.equal(e.card.border, c.line);
@@ -76,7 +90,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await page.locator("#modal .lib-confirm").waitFor();
       for (const scheme of ["light", "dark"]) {
         await page.emulateMedia({ colorScheme: scheme });
+        // Wait for the dialog's paint, including a delayed WebKit media update.
         await page.waitForTimeout(200);
+        await paintedCard(page, "#modal .dialog");
         const { colors: c, elements: e } = await palette(page, {
           dialog: "#modal .dialog", message: "#modal .lib-confirm", confirm: "#modal .primary",
         });
@@ -95,15 +111,20 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await page.goto("http://magpie.test/?view=settings&tab=network");
       const on = page.locator("#lanList").getByRole("button", { name: "On", exact: true });
       await on.waitFor();
-      const bounds = await on.boundingBox();
+      // the settings are read twice as the page opens (its own read and the
+      // state's), each drawing #lanList again: where On is comes from one read
+      // in the page, since a box asked of a button already replaced is null
+      const y = await (await page.waitForFunction(() => [...document.querySelectorAll("#lanList button")]
+        .find((b) => b.textContent.trim() === "On")?.getBoundingClientRect().y)).jsonValue();
       await page.mouse.move(500, 400);
-      await page.mouse.wheel(0, bounds.y - 250);
+      await page.mouse.wheel(0, y - 250);
       await on.click();
       await page.locator("#lanList .lan-url").waitFor();
       await page.mouse.move(500, 20);
       for (const scheme of ["light", "dark"]) {
         await page.emulateMedia({ colorScheme: scheme });
         await page.waitForTimeout(200);
+        await paintedCard(page, "#lanList");
         const { colors: c, elements: e } = await palette(page, { card: "#lanList", text: "#lanList .row.pref:last-child .name",
           key: "#lanList .lan-url", copy: "#lanList .row.pref:last-child .copy" });
         assert.equal(e.card.bg, c.card);
