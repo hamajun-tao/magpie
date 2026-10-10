@@ -317,7 +317,8 @@ class Update:
         if tests:
             name = 'Full GUI suite' if shared_assets else 'Changed GUI tests'
             self.check(name + ' (Chromium and WebKit, including locales)',
-                       ['/usr/bin/node', '--test', '--test-concurrency=2', *sorted(tests)], source,
+                       ['/usr/bin/xvfb-run', '-a', '/usr/bin/node', '--require',
+                        './scripts/gui-webkit-gtk.cjs', '--test', '--test-concurrency=2', *sorted(tests)], source,
                        {'NODE_PATH': str(MAINT / 'ui/node_modules')}, timeout=14400)
 
     def run(self, check_only=False):

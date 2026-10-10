@@ -127,6 +127,21 @@ ties. Family changes keep a matching style where possible, otherwise the
 nearest regular face; named variable instances are offered without arbitrary
 axis controls.
 
+Account expansion holds the card while new rows appear below. Collapsing a
+subscription account list holds its button under the pointer, including when
+later cards are taller in another language. `acctsMore` gives the replacement
+button a stable reader key; `hold` resolves that key before falling back to a
+connected ancestor. Key lists keep their existing card anchor.
+`usage-accounts-fold.test.cjs`, `usage-keys-fold.test.cjs` and
+`click-scroll.test.cjs` cover these paths.
+
+The Requests chart's split choices wrap within the available width, including
+Japanese labels at 420px (`usage-heatmap.test.cjs`). The Codex and Claude daily
+warm-up mode controls keep a minimum height and align at the top when more
+times make their row taller, keeping Off and + under the pointer
+(`warm-at-times.test.cjs`, `warm-at-own.test.cjs`). Tests wait for native wheel
+scrolling and asynchronous redraws before measuring a click's position.
+
 ### Shared UI rules
 
 - Every user-visible string has zh, zh-TW, ja and de translations with the same placeholders. `gui-zh-tw.test.cjs`, `gui-ja.test.cjs` and `gui-de.test.cjs` fail on a missing one; `gui-zh-tw.test.cjs` also fails on a zh-TW string with a Simplified character left in it.
@@ -163,3 +178,14 @@ BROWSER=webkit node --test internal/gui/tests/click-scroll.test.cjs
 webkit`). Set `NODE_PATH` when Playwright is installed outside the repo. The
 Test workflow in CI does not run this suite, so a GUI change must run it
 locally and report the result. See [`tests/README.md`](../../internal/gui/tests/README.md).
+
+### Server browser acceptance
+
+The custom server updater runs every GUI test when shared assets change.
+[`gui-webkit-gtk.cjs`](../../scripts/gui-webkit-gtk.cjs) is preloaded under
+`xvfb-run -a`: WebKit uses its GTK desktop backend on a private display while
+Chromium retains its usual options. This avoids the Linux WPE headless
+compositor's recursive SIGSEGV reproduced by `library-all.test.cjs`; the same
+WebKit revision passes that suite using GTK. Both engines, all fixtures and
+assertions still run. This affects acceptance only, not production browser
+behavior. The server must have `xvfb` and `xauth` installed.

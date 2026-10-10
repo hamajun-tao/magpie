@@ -56,6 +56,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     // against a scroll nobody asked for, which a locator's click would be
     await page.mouse.move(450, 300);
     for (let i = 0; i < 10 && !(await more.evaluate((b) => b.getBoundingClientRect().bottom <= innerHeight)); i++) await page.mouse.wheel(0, 300);
+    // Wheel events finish asynchronously in WebKit.
+    await page.waitForTimeout(300);
     const top = () => page.evaluate(() => document.querySelector("#view-gateway").scrollTop);
     const before = await top();
     await more.click();

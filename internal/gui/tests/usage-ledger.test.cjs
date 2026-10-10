@@ -122,7 +122,7 @@ async function wheelTo(page, loc) {
   await page.mouse.move(600, 300);
   for (let i = 0; i < 50; i++) {
     const b = await loc.boundingBox(), v = await page.locator("#view-usage").boundingBox();
-    if (b && b.y >= v.y && b.y + b.height < v.y + v.height - 40) return;
+    if (b && b.y >= v.y && b.y + b.height < v.y + v.height - 40) { await page.waitForTimeout(300); return; }
     await page.mouse.wheel(0, b && b.y < v.y ? -120 : 120);
     await page.waitForTimeout(30);
   }

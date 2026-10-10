@@ -14,6 +14,8 @@ const { test } = require("node:test");
 // the pointer onto an element where it is: a locator's hover would scroll
 // the card to it first, as a reader's pointer doesn't
 async function pointTo(p, loc) {
+  // WebKit delivers wheel movement asynchronously; measure once it settles.
+  await p.waitForTimeout(300);
   const b = await loc.boundingBox();
   await p.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 2 });
 }
@@ -31,7 +33,7 @@ const DAYS = [];
 for (let i = 0; i < SPAN; i++) {
   const d = new Date(from);
   d.setDate(d.getDate() + i);
-  if (i % 5 === 0 && i !== SPAN - 1) continue;
+  if (i % 5 === 0 && i !== SPAN - 1 && i !== SPAN - 11) continue;
   const calls = i === SPAN - 11 ? 500 : (i % 13) + 1;
   DAYS.push({ date: iso(d), calls, tokens: i === SPAN - 1 ? 9e9 : calls * 1e5 * (1 + (i % 7)), cost: calls * 0.5 });
 }

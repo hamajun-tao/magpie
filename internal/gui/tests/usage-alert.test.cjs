@@ -68,7 +68,7 @@ async function wheelTo(page) {
   await page.locator("#view-settings").hover();
   for (let i = 0; i < 40; i++) {
     const box = await page.locator("#balanceAlertRow").boundingBox();
-    if (box && box.y + box.height < 300 && await view(page) > 0) return;
+    if (box && box.y + box.height < 300 && await view(page) > 0) { await page.waitForTimeout(300); return; }
     await page.mouse.wheel(0, 120);
     await page.waitForTimeout(30);
   }

@@ -473,6 +473,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await p.mouse.move(b.rank.x + b.rank.width / 2, b.rank.y + b.rank.height / 2);
       await p.mouse.wheel(0, 120);
       for (let i = 0; i < 40 && (await box()).top === 0; i++) await p.waitForTimeout(25);
+      await p.waitForTimeout(300);
       b = await box();
       assert(b.top > 0, "the ranking scrolled");
       seen = await look();

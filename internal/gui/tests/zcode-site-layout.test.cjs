@@ -70,6 +70,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           await page.waitForTimeout(60);
         }
 
+        await page.waitForTimeout(300);
         const m = await box.evaluate((b) => {
           const r = (e) => e.getBoundingClientRect();
           const tt = b.querySelector(".tt"), q = b.querySelector(".tt .s");

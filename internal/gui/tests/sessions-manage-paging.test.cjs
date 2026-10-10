@@ -75,7 +75,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert(box.x >= 0 && box.x + box.width <= width, `${width}px: Show more fits`);
 
         // the next page goes under the rows drawn; they and the scroll stay
-        await rows.nth(99).scrollIntoViewIfNeeded();
+        // Move with the reader's wheel; the app restores unsolicited scrolls.
+        await page.mouse.move(width / 2, 320);
+        await page.mouse.wheel(0, 40000);
+        await page.waitForTimeout(300);
         await rows.first().evaluate((e) => { e.kept = true; });
         const y = () => rows.nth(99).evaluate((e) => Math.round(e.getBoundingClientRect().top));
         const before = await y();

@@ -270,7 +270,7 @@ class BuildEnvironmentTests(unittest.TestCase):
             runner.check = Mock()
             runner.check_gui(source, {'commit': 'old'})
             args = runner.check.call_args.args[1]
-            self.assertEqual(set(args[3:]), {p.relative_to(source).as_posix() for p in tests.iterdir()})
+            self.assertEqual(set(args[7:]), {p.relative_to(source).as_posix() for p in tests.iterdir()})
             self.assertEqual(runner.check.call_args.kwargs['timeout'], 14400)
 
 

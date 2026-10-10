@@ -74,7 +74,15 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const list = page.locator("#searchList");
       const head = list.locator(".row.search-add");
       await head.waitFor();
-      await head.scrollIntoViewIfNeeded();
+      // Settings holds its scroll against movement by code. Use the wheel.
+      await page.mouse.move(500, 700);
+      for (let i = 0; i < 40; i++) {
+        const b = await head.boundingBox();
+        if (b && b.y >= 60 && b.y + b.height < 1400) break;
+        await page.mouse.wheel(0, b && b.y < 60 ? -200 : 200);
+        await page.waitForTimeout(50);
+      }
+      await page.waitForTimeout(300);
       assert.equal(await list.locator("xpath=preceding-sibling::div[1]").textContent(), w.head);
       assert.equal(await head.locator(".name").innerText(), w.name);
       assert((await head.locator(".sub").innerText()).includes(w.none));

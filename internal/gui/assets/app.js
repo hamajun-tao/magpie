@@ -13357,6 +13357,8 @@ function acctsFolded(subs) {
 }
 function acctsMore(provider, n) {
   const b = el("button", "text quota-keys-more quota-accts-more", n ? t(n === 1 ? "Show 1 more account" : "Show {n} more accounts", { n }) : t("Show fewer accounts"));
+  b.dataset.readerKey = "accts-more:" + provider;
+  if (n) b.dataset.unrolls = "";
   b.type = "button";
   b.setAttribute("aria-expanded", String(!n));
   b.onclick = () => {
@@ -20867,7 +20869,16 @@ function standIn(h) {
   }
 }
 function hold(h) {
-  const a = h.chain.find(([n]) => atRest(n)) || (h.chain.some(([n]) => n.isConnected) ? null : standIn(h));
+  const a = h.chain.find((c) => {
+    const n = c[0];
+    // A fold redraws the button at another child index. Its explicit key
+    // finds the same control before a still-connected ancestor is held.
+    if (!n.isConnected && n.dataset?.readerKey) {
+      const same = h.v.querySelector(`[data-reader-key="${CSS.escape(n.dataset.readerKey)}"]`);
+      if (same && atRest(same)) c[0] = same;
+    }
+    return atRest(c[0]);
+  }) || (h.chain.some(([n]) => n.isConnected) ? null : standIn(h));
   if (!a) return;
   const v = h.v, d = onScreen(a[0], v) - a[1];
   if (Math.abs(d) >= 1) {

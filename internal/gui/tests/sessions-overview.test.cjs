@@ -96,6 +96,18 @@ function serve(lang, seen, ctl = {}) {
   };
 }
 
+async function wheelTo(page, loc) {
+  await loc.waitFor({ state: "visible" });
+  await page.mouse.move(500, 400);
+  for (let i = 0; i < 50; i++) {
+    const b = await loc.boundingBox();
+    if (b.y >= 80 && b.y + b.height <= 680) break;
+    await page.mouse.wheel(0, b.y < 80 ? -200 : 200);
+    await page.waitForTimeout(50);
+  }
+  await page.waitForTimeout(300);
+}
+
 const want = {
   en: { median: "median 120K · p90 880K", share: /\d+% in alpha/, busiest: /^Busiest at \S+ 09:00$/, detail: "Time", idLine: "Session ID", none: "Active time isn't kept by model." },
   zh: { median: "中位 120K · p90 880K", share: /alpha 占 \d+%/, busiest: /^最忙：\S+ 09:00$/, detail: "时间", idLine: "会话 ID", none: "活跃时长不按模型统计。" },
@@ -229,7 +241,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const first = page.locator("#sessTop .sess-top").first();
         assert.equal(await first.locator(".name").innerText(), "Top session 0");
         // in sight first: a click's own scroll to reach it isn't the page's
-        await first.scrollIntoViewIfNeeded();
+        await wheelTo(page, first);
         const y = (await first.boundingBox()).y;
         await first.click();
         await page.locator("#sessTop .sess-detail .sess-line").first().waitFor();
@@ -245,7 +257,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       });
 
       await t.test("a project picked from its bar, the page left where it was", async () => {
-        await page.locator("#sessProjects").scrollIntoViewIfNeeded();
+        await page.mouse.move(500, 400);
+        for (let i = 0; i < 50 && (await page.locator("#sessProjects").boundingBox()).y > 350; i++) {
+          await page.mouse.wheel(0, 200);
+          await page.waitForTimeout(50);
+        }
+        await page.waitForTimeout(300);
         const bar = page.locator("#sessProjects .sess-bar", { hasText: "beta" });
         const y = (await bar.boundingBox()).y;
         await bar.click();
@@ -269,6 +286,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       });
 
       await t.test("a week and 90 days as bars", async () => {
+        await wheelTo(page, page.locator("#sessRange .opt").nth(1));
         await page.locator("#sessRange .opt").nth(1).click();
         await page.waitForFunction(() => document.querySelectorAll("#sessChart .bars .bar").length === 7);
         assert.equal(await page.locator("#sessChart .sess-cal").count(), 0);
@@ -280,6 +298,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
       await t.test("the search sits by the latest sessions it filters, and stays with no match", async () => {
         const q = page.locator("#sessListHead #sessQ");
+        await q.waitFor({ state: "visible" });
         assert.equal(await q.count(), 1);
         assert.equal(await page.locator(".sess-tools #sessQ").count(), 0);
         const head = await page.locator("#sessListHead").boundingBox();
@@ -287,6 +306,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert(box.x + box.width >= head.x + head.width - 4, "at the heading's right: " + JSON.stringify([box, head]));
         assert(Math.abs((box.y + box.height / 2) - (head.y + head.height / 2)) <= 2, "on the heading's line");
         assert.equal(await page.locator("#sessList .row.sess").count(), 3);
+        await wheelTo(page, q);
         await q.fill("latest 1");
         await page.waitForFunction(() => document.querySelectorAll("#sessList .row.sess").length === 1);
         await q.fill("nothing like it");
@@ -305,6 +325,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
             .observe(document.querySelector("#sessStats"), { childList: true });
         });
         // a range picked while an agent writes: a few changed files read again
+        await wheelTo(page, page.locator("#sessRange .opt").nth(1));
         const started = Date.now();
         ctl.delay = 450;
         ctl.progress = () => ({ indexing: Date.now() - started < 400, files: 2, done: 1, bytes: 40000, read: 20000 });
