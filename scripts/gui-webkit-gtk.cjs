@@ -7,4 +7,8 @@ if (process.platform !== "linux" || !process.env.DISPLAY) {
   throw new Error("Server GUI checks require Linux and an isolated Xvfb display");
 }
 const launch = webkit.launch.bind(webkit);
-webkit.launch = (options = {}) => launch({ ...options, headless: false });
+webkit.launch = (options = {}) => launch({
+  ...options,
+  headless: false,
+  env: options.env ?? { ...process.env, LANG: "en_US.UTF-8", LC_ALL: "en_US.UTF-8" },
+});
