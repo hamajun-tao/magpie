@@ -47,6 +47,20 @@ filter only when that request is excluded. Usage's purpose picker remains a
 single choice sent to the ledger API. See `purpose-filter.test.cjs` and
 `routing-purpose-state.test.cjs`.
 
+### Account and ledger layout
+
+Subscription account lists use block flow so each wrapped quota row contributes
+its full height; WebKit's grid sizing otherwise lets a German quota button
+extend into the following sign-in controls. API key lists keep their grid.
+`window-cap.test.cjs` and `account-arrange.test.cjs` cover clicking the meters
+and rearranging accounts.
+
+The narrow ledger truncates account names rather than the whole source cell,
+leaving both source badges visible. Its tightest mode shortens model cells to
+100px while keeping account names at 110px, so the Status column fits in an
+820px English WebKit window. `session-identity.test.cjs` and
+`usage-ledger-fit.test.cjs` cover these layouts.
+
 ### Routing key and account folds
 
 Three or more API keys, or three or more accounts, of one provider standing
