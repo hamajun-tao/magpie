@@ -211,6 +211,13 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           // a person's click reaches it; Playwright's own waits for
           // aria-disabled to go, so it is forced
           const top = await page.evaluate(() => document.querySelector("#view-library").scrollTop);
+          // A forced click also skips stability; let the hovered chips fan out.
+          await c.hover();
+          await c.evaluate(async (c) => {
+            await Promise.all(c.parentElement.getAnimations({ subtree: true })
+              .filter((a) => a.effect.getTiming().iterations !== Infinity)
+              .map((a) => a.finished.catch(() => {})));
+          });
           await c.click({ force: true });
           assert.equal(await page.evaluate(() => document.querySelector("#view-library").scrollTop), top);
           await toast(page, words[lang].why[id]);

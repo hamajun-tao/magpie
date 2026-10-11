@@ -131,8 +131,15 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           assert.deepEqual(posts[0], { name: "web", agents: ["claude", "zed"] });
           assert.equal(await zed("web").getAttribute("aria-pressed"), "true");
           // a greyed chip sends nothing
+          // A forced click also skips stability; let the hovered chips fan out.
+          await zed("old").hover();
+          await zed("old").evaluate(async (c) => {
+            await Promise.all(c.parentElement.getAnimations({ subtree: true })
+              .filter((a) => a.effect.getTiming().iterations !== Infinity)
+              .map((a) => a.finished.catch(() => {})));
+          });
           await zed("old").click({ force: true });
-          await page.waitForTimeout(150);
+          await page.waitForFunction((text) => document.querySelector("#status").textContent === text, noSSE);
           assert.equal(posts.length, 1, "a click on Zed's greyed chip gave it an SSE server");
 
           // the editor names Zed, and greys it for SSE

@@ -23,7 +23,7 @@ const account = (logins) => ({
 const before = [{ user: "live@example.com", plan: "plus", active: true, on: true }];
 const after = [...before, { user: "cpa@example.com", plan: "pro", on: true }];
 
-function serve(lang, posted) {
+function serve(lang, posted, importFinished) {
   let providers = { providers: [account(before)], presets: [], excluded: [], gateway: { running: true, window: true } };
   const state = { agents: [], profiles: [], settings: { lang, theme: "light" } };
   return async (route) => {
@@ -38,7 +38,7 @@ function serve(lang, posted) {
     if (url.pathname === "/api/signin/s1") return json({ id: "s1", agent: "codex", state: "waiting", url: "https://auth.openai.com/oauth/authorize?x=1" });
     if (url.pathname === "/api/signin/import") {
       posted.push(route.request().postDataJSON());
-      await new Promise((r) => setTimeout(r, 300));
+      await importFinished;
       providers = { ...providers, providers: [account(after)] };
       return json({ providers, results: [
         { user: "cpa@example.com", status: "added", plan: "pro" },
@@ -69,7 +69,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const errors = [];
       page.on("pageerror", (e) => errors.push(e.message));
       const posted = [];
-      await page.route("**/*", serve(lang, posted));
+      let releaseImport;
+      const importFinished = new Promise((resolve) => { releaseImport = resolve; });
+      t.after(() => releaseImport());
+      await page.route("**/*", serve(lang, posted, importFinished));
       // the browser sign-in opens ChatGPT's page in a new window, and the real
       // one is Cloudflare's challenge: in Chromium, while it runs, clicks on
       // this page hung past their 5s (#1307). The window gets an empty page
@@ -124,8 +127,13 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const area = page.locator(".signing.import textarea");
       await area.fill(cpa);
       await page.locator(".signing.import button.primary").click();
-      await page.locator(".signing.import .spinner").waitFor();
-      assert.equal(await page.locator(".signing.import .tt .n").textContent(), say.checking);
+      // Keep the request in flight until its checking state has been read.
+      try {
+        await page.locator(".signing.import .spinner").waitFor();
+        assert.equal(await page.locator(".signing.import .tt .n").textContent(), say.checking);
+      } finally {
+        releaseImport();
+      }
       await page.locator(".signing.import .results").waitFor();
       assert.deepEqual(posted, [{ agent: "codex", files: [cpa] }]);
       const done = await page.locator(".signing.import .res .st").allTextContents();

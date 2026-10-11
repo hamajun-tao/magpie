@@ -60,8 +60,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await menu.locator(".pm-item", { hasText: "GPT-5" }).click();
       assert.equal(events.filter((e) => e.action === "models-key").length, 0, "a pick was sent before the menu closed");
       assert.equal(await menu.isVisible(), true, "a pick closed the menu");
+      const savedModels = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/caller-keys/models-key" && response.request().method() === "POST");
       await page.keyboard.press("Escape");
       await menu.waitFor({ state: "detached" });
+      await savedModels;
       assert.deepEqual(events.filter((e) => e.action === "models-key").map((e) => e.body), [{ key: "work", models: ["relay/*", "openai/gpt-5"] }]);
       await page.waitForFunction(() => document.querySelector('#gatewayKeys .acc[data-key="work"] .key-models.set'));
       assert.equal((await badge("work").textContent()).trim(), w.two);
@@ -70,8 +72,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await badge("server").click();
       await menu.waitFor();
       assert.equal(await menu.locator(".pm-item.on").count(), 2);
+      const clearedModels = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/caller-keys/models-key" && response.request().method() === "POST");
       await menu.locator(".pm-item", { hasText: w.all }).first().click();
       await menu.waitFor({ state: "detached" });
+      await clearedModels;
       assert.deepEqual(events.filter((e) => e.action === "models-key").at(-1).body, { key: "server", models: [] });
       await page.waitForFunction(() => !document.querySelector('#gatewayKeys .acc[data-key="server"] .key-models.set'));
       assert.deepEqual(await scrolled(), at, "no click moved the page");
