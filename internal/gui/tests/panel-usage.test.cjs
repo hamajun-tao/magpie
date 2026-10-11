@@ -130,7 +130,13 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         pages.push(p);
         p.setDefaultTimeout(5000);
         p.on("pageerror", (e) => errors.push(e.message));
-        await p.route("**/*", serve(lang, asked, opened, fitted, (h) => p.setViewportSize({width: p.viewportSize().width, height:Math.max(220,Math.min(560,h))})));
+        // Native GTK resize requests must complete in order, as the host
+        // applies fit requests on its UI loop.
+        let resizing = Promise.resolve();
+        await p.route("**/*", serve(lang, asked, opened, fitted, (h) => {
+          resizing = resizing.then(() => p.setViewportSize({ width: p.viewportSize().width, height: Math.max(220, Math.min(560, h)) }));
+          return resizing;
+        }));
         await p.goto(url);
         return p;
       };

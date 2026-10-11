@@ -109,7 +109,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.mouse.down();
         await page.mouse.move(g[0].x, g[1].y + 14, { steps: 12 });
         await page.locator("#agents > .row.dragging").waitFor();
+        const moveResponse = page.waitForResponse(response =>
+          new URL(response.url()).pathname === "/api/agents/arrange" && response.request().method() === "POST");
         await page.mouse.up();
+        assert.equal((await moveResponse).status(), 200);
         await page.waitForFunction((id) => document.querySelector("#agents > .row.agent").dataset.id === id, before[1]);
         assert.deepEqual(f.posted.at(-1).order.slice(0, 3), [before[1], before[0], before[2]]);
         await page.mouse.move(1, 1);
@@ -119,7 +122,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const id = g[2].id, y0 = await page.evaluate(() => [scrollY, document.querySelector("#view-agents").scrollTop]);
         await page.mouse.click(g[2].x, g[2].y);
         const hide = await page.evaluate(() => t("Hide"));
+        const hideResponse = page.waitForResponse(response =>
+          new URL(response.url()).pathname === "/api/agents/arrange" && response.request().method() === "POST");
         await page.getByRole("menuitem", { name: hide }).click();
+        assert.equal((await hideResponse).status(), 200);
         await page.waitForFunction((id) => !document.querySelector(`#agents > .row.agent[data-id="${id}"]`), id);
         assert.deepEqual(f.posted.at(-1).hidden, [id]);
 
@@ -135,7 +141,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           return b && getComputedStyle(b).opacity === "1" && b.getBoundingClientRect().width > 0;
         }, id);
         assert(await show.isVisible());
+        const showResponse = page.waitForResponse(response =>
+          new URL(response.url()).pathname === "/api/agents/arrange" && response.request().method() === "POST");
         await show.click();
+        assert.equal((await showResponse).status(), 200);
         await page.waitForFunction((id) => !!document.querySelector(`#agents > .row.agent[data-id="${id}"]`), id);
         assert.deepEqual(f.posted.at(-1).hidden, []);
         assert.deepEqual(await page.evaluate(() => [scrollY, document.querySelector("#view-agents").scrollTop]), y0, "a click moved the page");

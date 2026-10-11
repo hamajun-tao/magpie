@@ -183,7 +183,8 @@ locally and report the result. See [`tests/README.md`](../../internal/gui/tests/
 
 The custom server updater runs every GUI test when shared assets change.
 [`gui-webkit-gtk.cjs`](../../scripts/gui-webkit-gtk.cjs) is preloaded under
-`xvfb-run -a`: WebKit uses its GTK desktop backend on a private display while
+`xvfb-run -a`: each WebKit browser gets its own Xvfb display and GTK desktop backend, so
+parallel windows cannot compete for native pointer focus, while
 Chromium retains its usual options. GTK uses `en_US.UTF-8` by default, matching
 the other browser backends; an explicit launch environment remains respected.
 This avoids the Linux WPE headless

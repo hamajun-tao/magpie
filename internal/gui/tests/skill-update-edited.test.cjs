@@ -59,6 +59,14 @@ function server(lang, posts, st) {
 }
 
 const press = async (page, loc) => {
+  // Wait for the modal animation to settle without scrolling the locator.
+  await loc.evaluate(async element => {
+    const animations = element.getAnimations({ subtree: true });
+    const parents = [];
+    for (let parent = element.parentElement; parent; parent = parent.parentElement)
+      parents.push(...parent.getAnimations());
+    await Promise.all([...animations, ...parents].map(animation => animation.finished));
+  });
   const b = await loc.boundingBox();
   await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
 };

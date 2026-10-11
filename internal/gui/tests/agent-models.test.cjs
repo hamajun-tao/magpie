@@ -157,7 +157,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const gh = pop.locator(".am-gh").nth(2);
       assert.equal(await gh.locator(".am-all").evaluate((e) => getComputedStyle(e).opacity), "0");
       await gh.hover();
-      await page.waitForTimeout(250);
+      await page.waitForFunction(() => {
+        const button = document.querySelectorAll(".am-gh")[2]?.querySelector(".am-all");
+        return button && getComputedStyle(button).opacity === "1";
+      });
       assert.equal(await gh.locator(".am-all").evaluate((e) => getComputedStyle(e).opacity), "1");
       assert.equal(await gh.locator(".am-all").innerText(), w.showAll);
 
