@@ -77,6 +77,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.deepEqual(await scrolled(), at, "no click moved the page");
       // narrow: the row fits
       await page.setViewportSize({ width: 560, height: 740 });
+      // The header fits on the next frame after ResizeObserver delivery.
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
       assert.deepEqual(errors, []);
     });
